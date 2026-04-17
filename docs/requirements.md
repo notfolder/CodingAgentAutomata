@@ -288,7 +288,7 @@ flowchart TD
       - コンテナイメージ名・タグ（必須。例: `coding-agent-cli-exec-claude:latest`）
       - 起動コマンドテンプレート（必須。`{prompt}` および `{model}` 変数を使用可能であることをヘルプテキストとして表示する）
       - 環境変数マッピング（JSON形式。`llm_api_key`・`llm_base_url` などの情報名と環境変数名の対応を記述する。ヘルプテキストとして使用可能なキー一覧を表示する）
-      - 設定内容環境変数名（省略可。CLIが設定をJSON/YAML形式で受け取る環境変数名）
+      - 設定内容環境変数名（省略可。CLIが設定をJSON形式で受け取る環境変数名）
     - バリデーション: CLIエージェントID重複チェック、必須項目の入力チェック、環境変数マッピングのJSON形式チェック
     - 削除時に当該CLIエージェントIDを `default_cli` として持つユーザーが存在する場合はエラーを表示し削除を拒否する
   - システムMCP設定（CLIに渡すMCPサーバー設定。JSON形式で管理者が登録する。全ユーザーに適用される）
@@ -493,7 +493,7 @@ ConsumerはCLI起動時に渡す指示文をテンプレートから生成する
 | `{branch_name}` | 作業ブランチ名 |
 | `{repository_url}` | GitLabリポジトリのHTTPS URL |
 
-初期テンプレートでは、F-3はIssueの内容からブランチ名とMRタイトルの生成のみを行う最小限の指示とし、F-4はMR descriptionを指示の本体としてそのまま渡す構成とする。F-3の初期テンプレートは、CLIに対してブランチ名とMRタイトルをJSON形式で標準出力に出力するよう指示する構造とし、ConsumerはCLIの標準出力からブランチ名とMRタイトルを取得する。F-3でGitLab APIを使ってDraft MRを作成する際は、IssueのdescriptionをMR descriptionにそのまま設定する。これによりF-4（MR処理）が当該MRを検出した際に、元のIssue descriptionがCLIへの作業指示として引き継がれる。
+初期テンプレートでは、F-3はIssueの内容からブランチ名とMRタイトルの生成のみを行う最小限の指示とし、F-4はMR descriptionを指示の本体としてそのまま渡す構成とする。F-3の初期テンプレートは、CLIに対して標準出力の最終行にブランチ名とMRタイトルのJSONのみを出力するよう指示する構造とし、ConsumerはCLIの標準出力の最終行をJSONとしてパースしてブランチ名とMRタイトルを取得する。F-3でGitLab APIを使ってDraft MRを作成する際は、IssueのdescriptionをMR descriptionにそのまま設定する。これによりF-4（MR処理）が当該MRを検出した際に、元のIssue descriptionがCLIへの作業指示として引き継がれる。
 
 F-4の初期テンプレートでは、変更が完了したら適切な区切りでコミットし、すべての処理が完了したら最終コミットとプッシュを実行するよう指示を含める。
 
