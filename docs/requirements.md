@@ -1,4 +1,6 @@
-# GitLab自律コーディングエージェントシステム 要件定義書
+# CodingAgentAutomata 要件定義書
+
+**システム名**: CodingAgentAutomata
 
 ---
 
