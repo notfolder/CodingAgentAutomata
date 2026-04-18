@@ -1,0 +1,193 @@
+version: "3.9"
+
+# =============================================================
+# CodingAgentAutomata docker-compose 設定
+# 通常起動: docker compose up
+# テスト環境: docker compose --profile test up
+# CLIイメージビルド専用: docker compose --profile build-only build
+# =============================================================
+
+services:
+
+  # -------------------------------------------------------
+  # PostgreSQL データベース
+  # -------------------------------------------------------
+  postgresql:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # RabbitMQ メッセージキュー（管理UIあり）
+  # -------------------------------------------------------
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # 管理UI
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # Backend（FastAPI）
+  # -------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgresql
+      - rabbitmq
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # Frontend（Vue 3 + nginx）
+  # -------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # Producer（Webhook受信・ポーリング）
+  # -------------------------------------------------------
+  producer:
+    build:
+      context: .
+      dockerfile: producer/Dockerfile
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - postgresql
+      - rabbitmq
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # Consumer（タスク処理・CLIコンテナ管理）
+  # Docker socket をマウントして動的コンテナ起動を可能にする
+  # -------------------------------------------------------
+  consumer:
+    build:
+      context: .
+      dockerfile: consumer/Dockerfile
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - postgresql
+      - rabbitmq
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # GitLab CE（テスト環境専用）
+  # -------------------------------------------------------
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    restart: always
+    profiles:
+      - test
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost:8929'
+    ports:
+      - "8929:80"
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # LiteLLM Proxy（テスト環境専用）
+  # -------------------------------------------------------
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: always
+    profiles:
+      - test
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./config.yml:/app/config.yml
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # Playwright E2Eテスト実行コンテナ（テスト環境専用）
+  # -------------------------------------------------------
+  test_playwright:
+    image: mcr.microsoft.com/playwright:v1.59.0
+    restart: always
+    profiles:
+      - test
+    volumes:
+      - ./e2e:/e2e
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # Claude CLI exec イメージビルド専用サービス
+  # -------------------------------------------------------
+  cli_exec_claude:
+    build:
+      context: cli-exec/claude/
+    image: coding-agent-cli-exec-claude:latest
+    profiles:
+      - build-only
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # opencode CLI exec イメージビルド専用サービス
+  # -------------------------------------------------------
+  cli_exec_opencode:
+    build:
+      context: cli-exec/opencode/
+    image: coding-agent-cli-exec-opencode:latest
+    profiles:
+      - build-only
+    networks:
+      - codingagent_net
+
+# =============================================================
+# ボリューム定義
+# =============================================================
+volumes:
+  postgres_data:
+
+# =============================================================
+# ネットワーク定義
+# =============================================================
+networks:
+  codingagent_net:
+    driver: bridge
