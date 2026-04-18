@@ -89,7 +89,7 @@ async function handleLogin(): Promise<void> {
                 :rules="[rules.required]"
                 class="mb-3"
                 autocomplete="username"
-                data-testid="username"
+                :input-attrs="{ 'data-testid': 'username' }"
               />
 
               <!-- パスワード入力 -->
@@ -104,7 +104,7 @@ async function handleLogin(): Promise<void> {
                 class="mb-4"
                 autocomplete="current-password"
                 @click:append-inner="showPassword = !showPassword"
-                data-testid="password"
+                :input-attrs="{ 'data-testid': 'password' }"
               />
 
               <!-- ログインボタン -->

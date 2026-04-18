@@ -160,8 +160,8 @@ class AuthService:
         if not user.is_active:
             return None
 
-        # JWT トークンを発行して返す
-        return AuthService.create_access_token({"sub": user.username})
+        # JWT トークンを発行して返す（role を含める）
+        return AuthService.create_access_token({"sub": user.username, "role": user.role})
 
 
 def get_current_user(

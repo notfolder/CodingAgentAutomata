@@ -82,6 +82,18 @@ router.beforeEach((to) => {
     return '/tasks'
   }
 
+  // 一般ユーザーが他ユーザーの詳細・編集ページへアクセスしようとする場合はリダイレクト
+  if (
+    auth.isAuthenticated &&
+    !auth.isAdmin &&
+    (to.name === 'UserDetail' || to.name === 'UserEdit')
+  ) {
+    const targetUsername = to.params.username as string
+    if (targetUsername !== auth.currentUsername) {
+      return '/tasks'
+    }
+  }
+
   return true
 })
 

@@ -48,6 +48,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      network: host
     restart: always
     env_file:
       - .env
@@ -66,6 +67,7 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+      network: host
     restart: always
     ports:
       - "80:80"
@@ -81,6 +83,7 @@ services:
     build:
       context: .
       dockerfile: producer/Dockerfile
+      network: host
     restart: always
     env_file:
       - .env
@@ -98,6 +101,7 @@ services:
     build:
       context: .
       dockerfile: consumer/Dockerfile
+      network: host
     restart: always
     env_file:
       - .env
@@ -106,6 +110,22 @@ services:
       - rabbitmq
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # モック LLM サーバー（テスト環境専用）
+  # OpenAI / LiteLLM Proxy 互換のダミー API を提供する
+  # 実際の OpenAI / Anthropic API キーなしで E2E テストを実行可能にする
+  # -------------------------------------------------------
+  mock_llm:
+    build:
+      context: mock-llm/
+    restart: always
+    profiles:
+      - test
+    ports:
+      - "4000:4000"
     networks:
       - codingagent_net
 
@@ -127,16 +147,17 @@ services:
 
   # -------------------------------------------------------
   # LiteLLM Proxy（テスト環境専用）
+  # mock_llm で代替可能。実際の API キーがある場合のみ使用する
   # -------------------------------------------------------
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     restart: always
     profiles:
-      - test
+      - litellm
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
     ports:
-      - "4000:4000"
+      - "4001:4000"
     volumes:
       - ./litellm/config.yml:/app/config.yml
     networks:
@@ -156,6 +177,7 @@ services:
       - codingagent_net
     depends_on:
       - frontend
+      - mock_llm
 
   # -------------------------------------------------------
   # Claude CLI exec イメージビルド専用サービス
