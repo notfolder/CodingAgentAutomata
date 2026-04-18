@@ -182,7 +182,7 @@ test('T-15: 管理者がユーザーを削除できる', async ({ page }) => {
   await page.getByRole('button', { name: '削除' }).click();
 
   // 確認ダイアログが表示される
-  await expect(page.locator('text=/削除.*確認|本当に削除|削除しますか/')).toBeVisible();
+  await expect(page.locator('text=/削除.*確認|本当に削除|削除しますか/').first()).toBeVisible();
 
   // 確認ダイアログで実行
   await page.getByRole('button', { name: /削除する|OK|はい/ }).last().click();

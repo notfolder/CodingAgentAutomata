@@ -2,8 +2,19 @@ import { defineConfig } from '@playwright/test';
 
 /**
  * Playwright E2Eテスト設定
- * テスト実行: docker compose run --rm test_playwright sh -c "npm install && npx playwright test"
+ *
+ * LLMモックモード（デフォルト）:
+ *   docker compose --profile test up -d
+ *   docker compose run --rm test_playwright sh -c "npm install && npx playwright test"
+ *
+ * 実LLMモード（OpenAI/Anthropic APIを実際に呼び出す）:
+ *   docker compose --profile test-real up -d
+ *   docker compose run --rm test_playwright_real sh -c "npm install && npx playwright test"
  */
+
+// LLM_MODE 環境変数によってレポート出力先を分ける
+const llmMode = process.env.LLM_MODE ?? 'mock';
+
 export default defineConfig({
   testDir: './tests',
   timeout: 60000,
@@ -16,5 +27,6 @@ export default defineConfig({
     // headless モードで実行
     headless: true,
   },
-  reporter: [['html', { open: 'never' }], ['list']],
+  // LLMモードごとにレポートを分割保存する
+  reporter: [['html', { open: 'never', outputFolder: `playwright-report/${llmMode}` }], ['list']],
 });

@@ -4,6 +4,8 @@
   "description": "CodingAgentAutomata E2Eテスト（Playwright）",
   "scripts": {
     "test": "playwright test",
+    "test:mock": "LLM_MODE=mock playwright test",
+    "test:real": "LLM_MODE=real playwright test",
     "test:headed": "playwright test --headed",
     "test:report": "playwright show-report"
   },

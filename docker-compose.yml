@@ -2,9 +2,10 @@ version: "3.9"
 
 # =============================================================
 # CodingAgentAutomata docker-compose 設定
-# 通常起動: docker compose up
-# テスト環境: docker compose --profile test up
-# CLIイメージビルド専用: docker compose --profile build-only build
+# 通常起動:                docker compose up
+# テスト環境（LLMモック）: docker compose --profile test up
+# テスト環境（実LLM）:     docker compose --profile test-real up
+# CLIイメージビルド専用:   docker compose --profile build-only build
 # =============================================================
 
 services:
@@ -137,6 +138,7 @@ services:
     restart: always
     profiles:
       - test
+      - test-real
     environment:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://localhost:8929'
@@ -146,16 +148,21 @@ services:
       - codingagent_net
 
   # -------------------------------------------------------
-  # LiteLLM Proxy（テスト環境専用）
-  # mock_llm で代替可能。実際の API キーがある場合のみ使用する
+  # LiteLLM Proxy（実LLMモード / 単独起動）
+  # profiles:
+  #   litellm   → docker compose --profile litellm up（単独動作確認用）
+  #   test-real → docker compose --profile test-real up（E2E実LLMモード）
   # -------------------------------------------------------
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     restart: always
     profiles:
       - litellm
+      - test-real
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "4001:4000"
     volumes:
@@ -164,13 +171,18 @@ services:
       - codingagent_net
 
   # -------------------------------------------------------
-  # Playwright E2Eテスト実行コンテナ（テスト環境専用）
+  # Playwright E2Eテスト実行コンテナ（モックLLMモード）
+  # mock_llm を使用する（実APIキー不要）
+  # 起動: docker compose --profile test up -d
+  # 実行: docker compose run --rm test_playwright sh -c "npm install && npx playwright test"
   # -------------------------------------------------------
   test_playwright:
     image: mcr.microsoft.com/playwright:v1.59.0
     profiles:
       - test
     working_dir: /e2e
+    environment:
+      LLM_MODE: mock
     volumes:
       - ./e2e:/e2e
     networks:
@@ -178,6 +190,28 @@ services:
     depends_on:
       - frontend
       - mock_llm
+
+  # -------------------------------------------------------
+  # Playwright E2Eテスト実行コンテナ（実LLMモード）
+  # LiteLLM Proxy 経由で実際の OpenAI / Anthropic API を呼び出す
+  # 事前に .env に OPENAI_API_KEY / LITELLM_MASTER_KEY を設定すること
+  # 起動: docker compose --profile test-real up -d
+  # 実行: docker compose run --rm test_playwright_real sh -c "npm install && npx playwright test"
+  # -------------------------------------------------------
+  test_playwright_real:
+    image: mcr.microsoft.com/playwright:v1.59.0
+    profiles:
+      - test-real
+    working_dir: /e2e
+    environment:
+      LLM_MODE: real
+    volumes:
+      - ./e2e:/e2e
+    networks:
+      - codingagent_net
+    depends_on:
+      - frontend
+      - litellm
 
   # -------------------------------------------------------
   # Claude CLI exec イメージビルド専用サービス
