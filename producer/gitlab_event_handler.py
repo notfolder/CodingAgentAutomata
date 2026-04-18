@@ -13,6 +13,7 @@ import logging
 import uuid
 from typing import Callable, Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from shared.config.config import Settings
@@ -353,14 +354,14 @@ class GitLabEventHandler:
             if first_reviewer_username:
                 return first_reviewer_username
 
-        author_mr: dict = item.get("author") or {}
-        username_mr: Optional[str] = author_mr.get("username")
-        if not username_mr:
+        author: dict = item.get("author") or {}
+        username: Optional[str] = author.get("username")
+        if not username:
             logger.warning(
                 "GitLabEventHandler: MR iid=%d has no reviewer or author username",
                 item.get("iid"),
             )
-        return username_mr or None
+        return username or None
 
     def _enqueue_task(
         self,
@@ -403,15 +404,26 @@ class GitLabEventHandler:
                     project_id,
                     iid,
                 )
-        except Exception as exc:
-            # ユニーク制約違反または他の DB エラー → 重複として扱い、投入をスキップする
+        except IntegrityError as exc:
+            # ユニーク制約違反 → 重複タスクとして扱い、投入をスキップする
             logger.warning(
-                "GitLabEventHandler: DB insert failed (possible duplicate) "
+                "GitLabEventHandler: DB insert skipped (duplicate) "
                 "project_id=%d iid=%d task_type=%s: %s",
                 project_id,
                 iid,
                 task_type,
                 exc,
+            )
+            return
+        except Exception as exc:
+            # 接続エラー等の予期しない DB エラー → エラーログを出力してスキップする
+            logger.error(
+                "GitLabEventHandler: DB insert error project_id=%d iid=%d task_type=%s: %s",
+                project_id,
+                iid,
+                task_type,
+                exc,
+                exc_info=True,
             )
             return
 

@@ -5,7 +5,12 @@ pydantic-settings を使用して環境変数から設定値を読み込む。
 .env ファイルも自動的に読み込む（存在する場合）。
 """
 
+import logging
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# ロガーを設定
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -140,5 +145,7 @@ def get_project_ids(settings: Settings) -> list[int]:
             try:
                 ids.append(int(part))
             except ValueError:
-                pass
+                logger.warning(
+                    "get_project_ids: invalid project ID format '%s', skipping", part
+                )
     return ids
