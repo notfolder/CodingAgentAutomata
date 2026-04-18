@@ -1,8 +1,8 @@
 """
-Backend エントリーポイント（暫定版）。
+Backend エントリーポイント（完全版）。
 
 FastAPI アプリケーションを定義し、起動時に Alembic マイグレーションを自動実行する。
-現時点では /health エンドポイントのみ実装している。
+全ルーターを /api プレフィックスで登録し、CORS設定・ヘルスチェックを提供する。
 """
 
 import logging
@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # ロガーを設定
 logging.basicConfig(level=logging.INFO)
@@ -87,9 +88,28 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="CodingAgentAutomata Backend",
     description="GitLab自律コーディングエージェントシステムの管理API",
-    version="0.1.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
+
+# CORS 設定: 全オリジン許可（フロントエンドからのリクエストを受け付けるため）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 全ルーターを /api プレフィックスで登録
+# インポートはモジュールレベルで行い、sys.path 設定後に実行されるよう遅延インポートを回避
+from backend.routers import auth, cli_adapters, settings, tasks, users  # noqa: E402
+
+app.include_router(auth.router, prefix="/api")
+app.include_router(users.router, prefix="/api")
+app.include_router(tasks.router, prefix="/api")
+app.include_router(cli_adapters.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
 
 
 @app.get("/health")
