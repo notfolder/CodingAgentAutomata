@@ -163,6 +163,17 @@ class GitLabEventHandler:
         if not self._should_process(item, "issue"):
             return
 
+        # Webhook ペイロードには Issue author オブジェクトが含まれないため
+        # GitLab API から取得して補完する
+        gitlab_issue = self._gitlab_client.get_issue(project_id, iid)
+        if gitlab_issue:
+            item["author"] = gitlab_issue.get("author") or {}
+        else:
+            logger.warning(
+                "GitLabEventHandler: could not fetch Issue #%d from GitLab API, skip", iid
+            )
+            return
+
         username = self._get_username_for_task(item, "issue")
         if username is None:
             logger.warning(

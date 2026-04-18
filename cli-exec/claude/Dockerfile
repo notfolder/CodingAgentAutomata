@@ -28,4 +28,15 @@ RUN npm install -g @anthropic-ai/claude-code@latest
 ARG EXTRA_SETUP_COMMANDS=""
 RUN if [ -n "$EXTRA_SETUP_COMMANDS" ]; then sh -c "$EXTRA_SETUP_COMMANDS"; fi
 
+# 非 root ユーザーを作成（Claude Code CLI は root での --dangerously-skip-permissions 使用を禁止するため）
+RUN addgroup -S claude && adduser -S -G claude claude
+# docker グループへのアクセスを付与（DinD 構成で docker コマンドを使用する場合に必要）
+RUN addgroup claude ping || true
+
+# /workspace のオーナーを claude ユーザーに変更
+RUN mkdir -p /workspace && chown claude:claude /workspace
+# uv のパスを非 root ユーザーでも使えるように
+ENV PATH="/root/.local/bin:$PATH"
+
+USER claude
 WORKDIR /workspace

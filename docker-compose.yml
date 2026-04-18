@@ -34,8 +34,8 @@ services:
     image: rabbitmq:3.13-management
     restart: always
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
     ports:
       - "5672:5672"    # AMQP
       - "15672:15672"  # 管理UI
@@ -91,6 +91,11 @@ services:
     restart: always
     env_file:
       - .env
+      - path: .env.test
+        required: false
+    environment:
+      # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
+      GITLAB_API_URL: http://gitlab:8929
     depends_on:
       - postgresql
       - rabbitmq
@@ -110,6 +115,11 @@ services:
     restart: always
     env_file:
       - .env
+      - path: .env.test
+        required: false
+    environment:
+      # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
+      GITLAB_API_URL: http://gitlab:8929
     depends_on:
       - postgresql
       - rabbitmq
@@ -153,27 +163,63 @@ services:
       - codingagent_net
 
   # -------------------------------------------------------
-  # LiteLLM Proxy（実LLMモード / 単独起動）
-  # profiles:
-  #   litellm   → docker compose --profile litellm up（単独動作確認用）
-  #   test-real → docker compose --profile test-real up（E2E実LLMモード）
+  # LiteLLM Proxy（モック LLM モード: test プロファイル）
+  # mock_llm コンテナへ転送する（実 API キー不要）
+  # 起動: docker compose --profile test up
   # -------------------------------------------------------
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     restart: always
     profiles:
-      - litellm
-      - test-real
+      - test
+    # config.yml を明示的に指定して起動
+    command: ["--config", "/app/config.yml", "--port", "4000"]
     environment:
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+      # LiteLLM の Master Key（Virtual Key 発行・検証に使用）
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
+      # PostgreSQL への接続（Virtual Key 管理のために必要）
+      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgresql:5432/${POSTGRES_DB:-db}
+    ports:
+      - "4001:4000"
+    volumes:
+      - ./litellm/config.yml:/app/config.yml
+    depends_on:
+      - postgresql
+      - mock_llm
+    networks:
+      - codingagent_net
+
+  # -------------------------------------------------------
+  # LiteLLM Proxy（実 LLM モード: test-real プロファイル）
+  # 実際の OpenAI / Anthropic API を呼び出す
+  # 事前に .env に OPENAI_API_KEY / ANTHROPIC_API_KEY を設定すること
+  # 起動: docker compose --profile test-real up
+  # -------------------------------------------------------
+  litellm_real:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: always
+    profiles:
+      - test-real
+    # config-real.yml を明示的に指定して起動
+    command: ["--config", "/app/config.yml", "--port", "4000"]
+    environment:
+      # LiteLLM の Master Key（Virtual Key 発行・検証に使用）
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
+      # PostgreSQL への接続（Virtual Key 管理のために必要）
+      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgresql:5432/${POSTGRES_DB:-db}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
       - "4001:4000"
     volumes:
-      - ./litellm/config.yml:/app/config.yml
+      - ./litellm/config-real.yml:/app/config.yml
+    depends_on:
+      - postgresql
     networks:
-      - codingagent_net
+      codingagent_net:
+        # Consumer が常に "litellm" として名前解決できるようにネットワークエイリアスを設定
+        aliases:
+          - litellm
 
   # -------------------------------------------------------
   # Playwright E2Eテスト実行コンテナ（モックLLMモード）
@@ -186,8 +232,16 @@ services:
     profiles:
       - test
     working_dir: /e2e
+    # .env.test が存在する場合に GITLAB_ADMIN_TOKEN / GITLAB_PROJECT_ID 等を読み込む
+    env_file:
+      - path: .env.test
+        required: false
     environment:
       LLM_MODE: mock
+      # コンテナ内から到達可能なDockerサービス名でURLを上書き
+      GITLAB_API_URL: http://gitlab:8929
+      BACKEND_URL: http://backend:8000
+      BASE_URL: http://frontend:80
     volumes:
       - ./e2e:/e2e
     networks:
@@ -208,15 +262,23 @@ services:
     profiles:
       - test-real
     working_dir: /e2e
+    # .env.test が存在する場合に GITLAB_ADMIN_TOKEN / GITLAB_PROJECT_ID 等を読み込む
+    env_file:
+      - path: .env.test
+        required: false
     environment:
       LLM_MODE: real
+      # コンテナ内から到達可能なDockerサービス名でURLを上書き
+      GITLAB_API_URL: http://gitlab:8929
+      BACKEND_URL: http://backend:8000
+      BASE_URL: http://frontend:80
     volumes:
       - ./e2e:/e2e
     networks:
       - codingagent_net
     depends_on:
       - frontend
-      - litellm
+      - litellm_real
 
   # -------------------------------------------------------
   # Claude CLI exec イメージビルド専用サービス

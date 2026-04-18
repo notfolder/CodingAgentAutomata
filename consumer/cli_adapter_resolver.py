@@ -96,7 +96,9 @@ class CLIAdapterResolver:
             if info.get("mcp_config"):
                 try:
                     mcp_parsed = json.loads(info["mcp_config"])
-                    config_content["mcpServers"] = mcp_parsed
+                    # _build_mcp_config は {"mcpServers": {...}} 形式で返すため
+                    # mcpServers キーを取り出して設定する（二重ラップを防ぐ）
+                    config_content["mcpServers"] = mcp_parsed.get("mcpServers", {})
                 except (json.JSONDecodeError, TypeError):
                     logger.warning(
                         "CLIAdapterResolver: mcp_config の JSON パースに失敗しました"

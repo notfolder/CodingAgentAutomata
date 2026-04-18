@@ -58,7 +58,7 @@ GITLAB_API_URL = os.environ.get("GITLAB_API_URL", "http://localhost:8929")
 GITLAB_ADMIN_TOKEN = os.environ.get("GITLAB_ADMIN_TOKEN", "")
 GITLAB_CONTAINER = os.environ.get("GITLAB_CONTAINER", "codingagentautomata-gitlab-1")
 GITLAB_WEBHOOK_SECRET = os.environ.get("GITLAB_WEBHOOK_SECRET", "test-webhook-secret")
-LITELLM_PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000")
+LITELLM_PROXY_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4001")
 LITELLM_MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "")
 MOCK_LLM_URL = os.environ.get("MOCK_LLM_URL", "http://localhost:4000")
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "http://localhost:8080/webhook")
@@ -298,6 +298,18 @@ def setup_test_project(root_token: str, bot_user_id: str) -> str:
     return project_id
 
 
+def allow_local_requests(root_token: str) -> None:
+    """GitLab 管理者設定でローカルネットワークへの Webhook リクエストを許可する"""
+    resp = _gitlab_api("PUT", "/application/settings", root_token, json={
+        "allow_local_requests_from_hooks_and_services": True,
+        "allow_local_requests_from_web_hooks_and_services": True,
+    })
+    if resp.status_code == 200:
+        logger.info("ローカル Webhook リクエストを許可しました")
+    else:
+        logger.warning("ローカル Webhook 許可設定失敗 (%d): %s", resp.status_code, resp.text[:200])
+
+
 def setup_webhook(root_token: str, project_id: str) -> None:
     """プロジェクトに Webhook を設定する"""
     resp = _gitlab_api("POST", f"/projects/{project_id}/hooks", root_token, json={
@@ -314,23 +326,70 @@ def setup_webhook(root_token: str, project_id: str) -> None:
         logger.warning("Webhook 設定失敗 (%d): %s", resp.status_code, resp.text[:200])
 
 
-def setup_gitlab_test_users(root_token: str) -> None:
-    """GitLab にテストユーザーを作成する"""
+def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
+    """GitLab にテストユーザーを作成し、PAT を発行してプロジェクトに追加する
+
+    Args:
+        root_token: GitLab 管理者 PAT
+        project_id: テストユーザーを追加するプロジェクト ID
+
+    Returns:
+        {username: user_pat} の辞書
+    """
+    user_pats: dict[str, str] = {}
+
     for user in TEST_USERS:
+        # ユーザー作成（force_random_password で GitLab にパスワードを自動生成させる）
+        # パスワードは PAT 認証のみを使用するため不要
         resp = _gitlab_api("POST", "/users", root_token, json={
             "username": user["username"],
             "email": user["email"],
-            "password": user["password"],
+            "force_random_password": True,
             "name": user["name"],
             "skip_confirmation": True,
         })
         if resp.status_code == 201:
-            logger.info("GitLab テストユーザー '%s' を作成しました", user["username"])
+            user_id = str(resp.json()["id"])
+            logger.info("GitLab テストユーザー '%s' を作成しました (ID: %s)", user["username"], user_id)
         elif resp.status_code in (409, 422):
-            logger.info("GitLab テストユーザー '%s' は既に存在します", user["username"])
+            resp2 = _gitlab_api("GET", f"/users?username={user['username']}", root_token)
+            existing = resp2.json()
+            if not existing:
+                logger.warning("GitLab テストユーザー '%s' の検索に失敗しました", user["username"])
+                continue
+            user_id = str(existing[0]["id"])
+            logger.info("GitLab テストユーザー '%s' は既に存在します (ID: %s)", user["username"], user_id)
         else:
             logger.warning("GitLab テストユーザー '%s' 作成失敗 (%d): %s",
                            user["username"], resp.status_code, resp.text[:200])
+            continue
+
+        # ユーザー用 PAT 発行（admin API 経由なのでパスワード不要）
+        pat_resp = _gitlab_api("POST", f"/users/{user_id}/personal_access_tokens", root_token, json={
+            "name": f"{user['username']}-e2e-token",
+            "scopes": ["api", "read_api", "write_repository"],
+        })
+        if pat_resp.status_code == 201:
+            user_pat = pat_resp.json()["token"]
+            user_pats[user["username"]] = user_pat
+            logger.info("GitLab テストユーザー '%s' の PAT を発行しました: %s...", user["username"], user_pat[:10])
+        else:
+            logger.warning("GitLab テストユーザー '%s' の PAT 発行失敗 (%d): %s",
+                           user["username"], pat_resp.status_code, pat_resp.text[:200])
+
+        # プロジェクトメンバーとして追加（Reporter = 20、既に存在する場合はスキップ）
+        if project_id:
+            member_resp = _gitlab_api("POST", f"/projects/{project_id}/members", root_token, json={
+                "user_id": user_id,
+                "access_level": 20,  # Reporter
+            })
+            if member_resp.status_code in (201, 409):
+                logger.info("GitLab テストユーザー '%s' をプロジェクトに追加しました", user["username"])
+            else:
+                logger.warning("GitLab テストユーザー '%s' のプロジェクト追加失敗 (%d): %s",
+                               user["username"], member_resp.status_code, member_resp.text[:200])
+
+    return user_pats
 
 
 # -----------------------------------------------------------------------
@@ -369,10 +428,12 @@ def setup_virtual_keys() -> dict[str, str]:
             else:
                 logger.warning("Virtual Key 発行失敗 (%s / %d): %s",
                                user["username"], resp.status_code, resp.text[:100])
-                virtual_keys[user["username"]] = f"sk-mock-{user['username']}"
+                # LiteLLM Virtual Key 発行失敗時は Master Key をフォールバックとして使用
+                # Master Key は DB なしで全モデルにアクセス可能
+                virtual_keys[user["username"]] = LITELLM_MASTER_KEY or f"sk-mock-{user['username']}"
         except Exception as e:
             logger.warning("Virtual Key 発行例外 (%s): %s", user["username"], e)
-            virtual_keys[user["username"]] = f"sk-mock-{user['username']}"
+            virtual_keys[user["username"]] = LITELLM_MASTER_KEY or f"sk-mock-{user['username']}"
 
     return virtual_keys
 
@@ -415,15 +476,27 @@ def setup_backend_users(virtual_keys: dict[str, str]) -> None:
 # .env.test 出力
 # -----------------------------------------------------------------------
 
-def save_env_test(root_token: str, bot_pat: str, project_id: str) -> None:
-    """.env.test ファイルにセットアップ結果を保存する"""
+def save_env_test(root_token: str, bot_pat: str, project_id: str, user_pats: dict[str, str]) -> None:
+    """.env.test ファイルにセットアップ結果を保存する
+
+    Args:
+        root_token: GitLab 管理者 PAT（GITLAB_ADMIN_TOKEN）
+        bot_pat: bot ユーザーの PAT（GITLAB_PAT）
+        project_id: テスト用プロジェクト ID
+        user_pats: {username: user_pat} の辞書
+    """
+    # testuser-claude の PAT を GITLAB_USER_TOKEN として保存（E2E テストでの issue 作成に使用）
+    user_token = user_pats.get("testuser-claude", "")
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env.test")
     content = f"""# E2E テスト用環境変数（scripts/test_setup.py が自動生成）
 GITLAB_API_URL={GITLAB_API_URL}
 GITLAB_ADMIN_TOKEN={root_token}
+GITLAB_PAT={bot_pat}
+GITLAB_USER_TOKEN={user_token}
 GITLAB_BOT_NAME={BOT_USERNAME}
 GITLAB_BOT_LABEL={BOT_LABEL}
 GITLAB_PROJECT_ID={project_id}
+GITLAB_PROJECT_IDS={project_id}
 GITLAB_WEBHOOK_SECRET={GITLAB_WEBHOOK_SECRET}
 BACKEND_URL={BACKEND_URL}
 BASE_URL=http://localhost:80
@@ -458,6 +531,7 @@ def main() -> None:
         logger.warning("root PAT の取得に失敗しました。GitLab セットアップをスキップします。")
         bot_pat = ""
         project_id = ""
+        user_pats: dict[str, str] = {}
     else:
         # --- bot ユーザー・PAT 設定 ---
         bot_user_id, bot_pat = setup_gitlab_bot(root_token)
@@ -469,11 +543,13 @@ def main() -> None:
         if not project_id:
             logger.warning("テスト用プロジェクトの作成に失敗しました")
         else:
+            # --- ローカル Webhook リクエストを許可 ---
+            allow_local_requests(root_token)
             # --- Webhook 設定 ---
             setup_webhook(root_token, project_id)
 
         # --- GitLab テストユーザー作成 ---
-        setup_gitlab_test_users(root_token)
+        user_pats = setup_gitlab_test_users(root_token, project_id)
 
     # --- Virtual Key 発行 ---
     virtual_keys = setup_virtual_keys()
@@ -483,7 +559,7 @@ def main() -> None:
 
     # --- .env.test 出力 ---
     if root_token and project_id:
-        save_env_test(root_token, bot_pat, project_id)
+        save_env_test(root_token, bot_pat, project_id, user_pats)
 
     logger.info("=" * 60)
     logger.info("テスト環境セットアップ完了！")

@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -e /app/shared
 COPY backend/ /app/backend/
 RUN pip install --no-cache-dir -e /app/backend
 
+# セットアップスクリプトをコピー
+COPY scripts/setup.py /app/scripts/setup.py
+
 # 作業ディレクトリを backend に移動
 WORKDIR /app/backend
 

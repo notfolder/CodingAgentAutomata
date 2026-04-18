@@ -118,6 +118,37 @@ class GitLabClient:
         return None
 
     # ------------------------------------------------------------------
+    # 内部ヘルパー: ページネーション付きリスト取得
+    # ------------------------------------------------------------------
+
+    def _list_all_pages(self, manager, **kwargs) -> list:
+        """
+        手動ページネーションで全件取得する。
+
+        python-gitlab の list(all=True) は GitLab の Link ヘッダーを使ったページネーションを行うが、
+        GitLab の external_url が localhost に設定されている場合、コンテナ内からの次ページ取得が
+        失敗する。そのため page=1, 2, ... を明示的に指定して全件取得する。
+
+        Args:
+            manager: python-gitlab のマネージャオブジェクト（issues, mergerequests など）
+            **kwargs: manager.list() に渡す追加引数
+
+        Returns:
+            取得した全アイテムのリスト
+        """
+        results = []
+        page = 1
+        per_page = 100
+        while True:
+            items = manager.list(page=page, per_page=per_page, **kwargs)
+            results.extend(items)
+            if len(items) < per_page:
+                # 取得件数が per_page 未満なら最終ページ
+                break
+            page += 1
+        return results
+
+    # ------------------------------------------------------------------
     # Issue 操作
     # ------------------------------------------------------------------
 
@@ -209,7 +240,7 @@ class GitLabClient:
                 kwargs["assignee_username"] = assignee_username
             if labels:
                 kwargs["labels"] = labels
-            issues = project.issues.list(all=True, **kwargs)
+            issues = self._list_all_pages(project.issues, **kwargs)
             return [i.attributes for i in issues]
 
         result = self._call_with_retry(_call)
@@ -229,7 +260,7 @@ class GitLabClient:
         def _call():
             project = self._gl.projects.get(project_id)
             issue = project.issues.get(iid)
-            notes = issue.notes.list(all=True)
+            notes = self._list_all_pages(issue.notes)
             return [n.attributes for n in notes]
 
         result = self._call_with_retry(_call)
@@ -265,7 +296,7 @@ class GitLabClient:
                 kwargs["assignee_username"] = assignee_username
             if labels:
                 kwargs["labels"] = labels
-            mrs = project.mergerequests.list(all=True, **kwargs)
+            mrs = self._list_all_pages(project.mergerequests, **kwargs)
             return [mr.attributes for mr in mrs]
 
         result = self._call_with_retry(_call)
@@ -437,7 +468,7 @@ class GitLabClient:
         def _call():
             project = self._gl.projects.get(project_id)
             mr = project.mergerequests.get(iid)
-            notes = mr.notes.list(all=True)
+            notes = self._list_all_pages(mr.notes)
             return [n.attributes for n in notes]
 
         result = self._call_with_retry(_call)
@@ -523,7 +554,7 @@ class GitLabClient:
             ユーザー属性辞書、存在しない場合は None
         """
         def _call():
-            users = self._gl.users.list(username=username)
+            users = self._gl.users.list(username=username, per_page=1, page=1)
             if not users:
                 return None
             return users[0].attributes

@@ -149,7 +149,8 @@ class IssueToMRConverter:
         if user.user_mcp_config:
             mcp_config.update(user.user_mcp_config)
 
-        return json.dumps(mcp_config, ensure_ascii=False)
+        # Claude Code CLI は {"mcpServers": {...}} 形式を要求するため、mcpServers キーでラップして返す
+        return json.dumps({"mcpServers": mcp_config}, ensure_ascii=False)
 
     def convert(
         self,

@@ -6,6 +6,8 @@ DinD（Docker in Docker）構成のため privileged=True で起動する。
 """
 
 import logging
+import os
+import socket
 from typing import Optional
 
 import docker
@@ -34,6 +36,44 @@ class CLIContainerManager:
         # docker.sock 経由で Docker デーモンに接続
         self._client: docker.DockerClient = docker.from_env()
         logger.debug("CLIContainerManager: Docker クライアントを初期化しました")
+
+        # Consumer コンテナ自身が接続しているネットワークを取得（CLI コンテナも同一ネットワークで起動するため）
+        self._cli_network: Optional[str] = self._get_self_network()
+        logger.info(
+            "CLIContainerManager: CLI コンテナ接続先ネットワーク=%s", self._cli_network
+        )
+
+    def _get_self_network(self) -> Optional[str]:
+        """
+        Consumer コンテナ自身が参加している Docker ネットワーク名を返す。
+
+        /proc/self/cgroup または環境変数 CLI_DOCKER_NETWORK から取得する。
+        環境変数 CLI_DOCKER_NETWORK が設定されている場合はその値を使用する。
+
+        Returns:
+            Optional[str]: ネットワーク名（取得できない場合は None）
+        """
+        # 環境変数による明示指定を優先
+        env_network = os.environ.get("CLI_DOCKER_NETWORK")
+        if env_network:
+            return env_network
+
+        # Consumer 自身のホスト名（= コンテナ ID の先頭12文字）からネットワークを取得
+        try:
+            hostname = socket.gethostname()
+            self_container = self._client.containers.get(hostname)
+            networks = list(
+                self_container.attrs.get("NetworkSettings", {})
+                .get("Networks", {})
+                .keys()
+            )
+            if networks:
+                return networks[0]
+        except Exception as exc:
+            logger.warning(
+                "CLIContainerManager: 自身のネットワーク取得に失敗しました: %s", exc
+            )
+        return None
 
     def start_container(
         self,
@@ -77,6 +117,8 @@ class CLIContainerManager:
             detach=True,
             # コンテナ終了後も自動削除しない（ログ取得のため残す）
             remove=False,
+            # Consumer コンテナと同一ネットワークに接続（mock_llm/litellm へのサービス名解決のため）
+            network=self._cli_network if self._cli_network else None,
         )
         logger.info(
             "CLIContainerManager.start_container: container_id=%s", container.id
