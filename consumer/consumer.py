@@ -99,15 +99,15 @@ async def main() -> None:
     # ------------------------------------------------------------------
     # 各サービスの初期化
     # ------------------------------------------------------------------
-    from virtual_key_service import VirtualKeyService
-    from cli_log_masker import CLILogMasker
-    from cli_adapter_resolver import CLIAdapterResolver
-    from prompt_builder import PromptBuilder
-    from cli_container_manager import CLIContainerManager
-    from progress_manager import ProgressManager
-    from issue_to_mr_converter import IssueToMRConverter
-    from mr_processor import MRProcessor
-    from task_processor import TaskProcessor
+    from consumer.virtual_key_service import VirtualKeyService
+    from consumer.cli_log_masker import CLILogMasker
+    from consumer.cli_adapter_resolver import CLIAdapterResolver
+    from consumer.prompt_builder import PromptBuilder
+    from consumer.cli_container_manager import CLIContainerManager
+    from consumer.progress_manager import ProgressManager
+    from consumer.issue_to_mr_converter import IssueToMRConverter
+    from consumer.mr_processor import MRProcessor
+    from consumer.task_processor import TaskProcessor
 
     virtual_key_service = VirtualKeyService()
     cli_log_masker = CLILogMasker()

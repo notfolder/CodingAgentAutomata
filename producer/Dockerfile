@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir -e /app/shared
 COPY producer/ /app/producer/
 RUN pip install --no-cache-dir -e /app/producer
 
-# 作業ディレクトリを producer に移動
-WORKDIR /app/producer
+# 作業ディレクトリを /app に維持（パッケージとして実行するため）
+WORKDIR /app
 
-# producer エントリーポイント
-CMD ["python", "producer.py"]
+# producer エントリーポイント（-m でパッケージとして実行して名前衝突を回避）
+CMD ["python", "-m", "producer.producer"]

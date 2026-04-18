@@ -19,8 +19,8 @@ RUN pip install --no-cache-dir -e /app/shared
 COPY consumer/ /app/consumer/
 RUN pip install --no-cache-dir -e /app/consumer
 
-# 作業ディレクトリを consumer に移動
-WORKDIR /app/consumer
+# 作業ディレクトリを /app に維持（パッケージとして実行するため）
+WORKDIR /app
 
-# consumer エントリーポイント
-CMD ["python", "consumer.py"]
+# consumer エントリーポイント（-m でパッケージとして実行して名前衝突を回避）
+CMD ["python", "-m", "consumer.consumer"]

@@ -511,7 +511,7 @@ class MRProcessor:
             # ==========================================
             # ステップ 11: CLILogMasker で PAT マスク後に cli_log を DB 保存
             # ==========================================
-            from cli_log_masker import CLILogMasker
+            from consumer.cli_log_masker import CLILogMasker
             masker = CLILogMasker()
             raw_log: str = "\n".join(cli_log_lines)
             masked_log: str = masker.mask(raw_log)
@@ -558,7 +558,7 @@ class MRProcessor:
 
             # PAT マスク処理してログを保存
             try:
-                from cli_log_masker import CLILogMasker
+                from consumer.cli_log_masker import CLILogMasker
                 masker = CLILogMasker()
                 raw_log = "\n".join(cli_log_lines)
                 masked_log = masker.mask(raw_log)

@@ -148,7 +148,7 @@ services:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://localhost:8929'
     ports:
-      - "8929:80"
+      - "8929:8929"
     networks:
       - codingagent_net
 

@@ -131,10 +131,17 @@ def wait_for_gitlab(max_wait: int = 600) -> bool:
     start = time.time()
     while time.time() - start < max_wait:
         try:
+            # /-/health が 200 の場合は確実に起動済み
             resp = requests.get(f"{GITLAB_API_URL}/-/health", timeout=5)
             if resp.status_code == 200:
-                logger.info("GitLab CE が起動しました (%.0f 秒)", time.time() - start)
+                logger.info("GitLab CE が起動しました（/-/health 200）(%.0f 秒)", time.time() - start)
                 return True
+            # /-/health が 404 の場合は GitLab バージョンによりエンドポイント未存在 → API で確認
+            if resp.status_code == 404:
+                resp2 = requests.get(f"{GITLAB_API_URL}/api/v4/version", timeout=5)
+                if resp2.status_code in (200, 401):
+                    logger.info("GitLab CE が起動しました（API 応答確認）(%.0f 秒)", time.time() - start)
+                    return True
         except Exception:
             pass
         elapsed = int(time.time() - start)
