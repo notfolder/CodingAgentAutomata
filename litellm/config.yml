@@ -1,0 +1,18 @@
+# LiteLLM Proxy 設定（テスト環境用）
+# OpenAI と Anthropic へのモデル転送設定
+
+model_list:
+  # OpenAI GPT-4o（opencode テスト用）
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+  # Anthropic Claude（claude テスト用）
+  - model_name: claude-opus-4-5
+    litellm_params:
+      model: claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
