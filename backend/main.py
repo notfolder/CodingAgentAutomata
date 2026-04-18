@@ -8,6 +8,8 @@ FastAPI アプリケーションを定義し、起動時に Alembic マイグレ
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 from fastapi import FastAPI
 
@@ -57,21 +59,16 @@ def run_migrations() -> None:
     logger.info("Alembicマイグレーション完了")
 
 
-# FastAPI アプリケーションインスタンスを生成
-app = FastAPI(
-    title="CodingAgentAutomata Backend",
-    description="GitLab自律コーディングエージェントシステムの管理API",
-    version="0.1.0",
-)
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
+@asynccontextmanager
+async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     """
-    アプリケーション起動時のイベントハンドラ。
+    アプリケーションのライフサイクル管理コンテキストマネージャ。
 
-    Alembic マイグレーションを自動実行する。
+    起動時: Alembic マイグレーションを自動実行する。
     マイグレーション失敗時はアプリケーション起動を中断する。
+
+    Args:
+        application: FastAPI アプリケーションインスタンス
     """
     logger.info("アプリケーション起動中...")
     try:
@@ -80,6 +77,19 @@ async def startup_event() -> None:
         logger.error("マイグレーション失敗: %s", exc, exc_info=True)
         # マイグレーション失敗時はアプリを起動しない
         raise
+    # アプリケーション実行中
+    yield
+    # シャットダウン処理（現時点では特になし）
+    logger.info("アプリケーション終了")
+
+
+# FastAPI アプリケーションインスタンスを生成
+app = FastAPI(
+    title="CodingAgentAutomata Backend",
+    description="GitLab自律コーディングエージェントシステムの管理API",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 
 @app.get("/health")

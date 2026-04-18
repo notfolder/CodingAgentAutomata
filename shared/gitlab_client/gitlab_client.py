@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 _MAX_RETRIES = 3          # 5xx / 接続エラーの最大リトライ回数
 _RATE_LIMIT_MAX_RETRIES = 5  # 429 レートリミット時の最大リトライ回数
 _BASE_BACKOFF_SEC = 1.0   # バックオフ基底秒数
+_MAX_BACKOFF_SEC = 60.0   # バックオフ最大待機秒数
 
 
 class GitLabClient:
@@ -64,6 +65,8 @@ class GitLabClient:
             funcの戻り値、または 404 の場合は None
         """
         last_exc: Optional[Exception] = None
+        # 429 レートリミット用の独立したカウンター
+        rate_limit_count: int = 0
 
         for attempt in range(_MAX_RETRIES):
             try:
@@ -79,18 +82,22 @@ class GitLabClient:
                     logger.debug("GitLab 404: %s", exc)
                     return None
                 if status == 429:
-                    # レートリミット: 指数バックオフでリトライ
-                    wait = _BASE_BACKOFF_SEC * (2 ** attempt)
+                    # レートリミット: 独立カウンターで指数バックオフリトライ
+                    rate_limit_count += 1
+                    if rate_limit_count > _RATE_LIMIT_MAX_RETRIES:
+                        logger.error("GitLab rate limit (429) exceeded max retries (%d)",
+                                     _RATE_LIMIT_MAX_RETRIES)
+                        raise
+                    wait = min(_BASE_BACKOFF_SEC * (2 ** rate_limit_count), _MAX_BACKOFF_SEC)
                     logger.warning("GitLab rate limit (429), retry %d/%d in %.1fs",
-                                   attempt + 1, _RATE_LIMIT_MAX_RETRIES, wait)
+                                   rate_limit_count, _RATE_LIMIT_MAX_RETRIES, wait)
                     time.sleep(wait)
                     last_exc = exc
-                    if attempt >= _RATE_LIMIT_MAX_RETRIES - 1:
-                        raise
+                    # 429 はメインループのカウントを消費しない（continue でスキップ）
                     continue
                 if status >= 500:
                     # サーバーエラー: 指数バックオフでリトライ
-                    wait = _BASE_BACKOFF_SEC * (2 ** attempt)
+                    wait = min(_BASE_BACKOFF_SEC * (2 ** attempt), _MAX_BACKOFF_SEC)
                     logger.warning("GitLab server error (%d), retry %d/%d in %.1fs",
                                    status, attempt + 1, _MAX_RETRIES, wait)
                     time.sleep(wait)
@@ -99,7 +106,7 @@ class GitLabClient:
                 # その他の HTTPエラーは即例外送出
                 raise
             except Exception as exc:  # 接続エラーなど
-                wait = _BASE_BACKOFF_SEC * (2 ** attempt)
+                wait = min(_BASE_BACKOFF_SEC * (2 ** attempt), _MAX_BACKOFF_SEC)
                 logger.warning("GitLab request error: %s, retry %d/%d in %.1fs",
                                exc, attempt + 1, _MAX_RETRIES, wait)
                 time.sleep(wait)
