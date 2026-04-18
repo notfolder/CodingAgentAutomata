@@ -73,6 +73,7 @@ async function handleLogin(): Promise<void> {
               variant="tonal"
               class="mb-4"
               closable
+              data-testid="error-message"
               @click:close="errorMessage = ''"
             >
               {{ errorMessage }}
@@ -88,6 +89,7 @@ async function handleLogin(): Promise<void> {
                 :rules="[rules.required]"
                 class="mb-3"
                 autocomplete="username"
+                data-testid="username"
               />
 
               <!-- パスワード入力 -->
@@ -102,6 +104,7 @@ async function handleLogin(): Promise<void> {
                 class="mb-4"
                 autocomplete="current-password"
                 @click:append-inner="showPassword = !showPassword"
+                data-testid="password"
               />
 
               <!-- ログインボタン -->
@@ -111,6 +114,7 @@ async function handleLogin(): Promise<void> {
                 size="large"
                 block
                 :loading="loading"
+                data-testid="login-button"
               >
                 ログイン
               </v-btn>

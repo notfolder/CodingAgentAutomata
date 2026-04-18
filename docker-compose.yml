@@ -138,7 +138,7 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      - ./config.yml:/app/config.yml
+      - ./litellm/config.yml:/app/config.yml
     networks:
       - codingagent_net
 
@@ -147,13 +147,15 @@ services:
   # -------------------------------------------------------
   test_playwright:
     image: mcr.microsoft.com/playwright:v1.59.0
-    restart: always
     profiles:
       - test
+    working_dir: /e2e
     volumes:
       - ./e2e:/e2e
     networks:
       - codingagent_net
+    depends_on:
+      - frontend
 
   # -------------------------------------------------------
   # Claude CLI exec イメージビルド専用サービス
