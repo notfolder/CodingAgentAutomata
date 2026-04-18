@@ -152,8 +152,7 @@ class CLIAdapterService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"CLIアダプタ '{cli_id}' はユーザーのデフォルトCLIとして"
-                    "使用中のため削除できません。"
+                    f"CLIアダプタ '{cli_id}' はユーザーのデフォルトCLIとして使用中のため削除できません。"
                 ),
             )
 

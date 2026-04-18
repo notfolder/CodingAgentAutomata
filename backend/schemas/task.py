@@ -7,7 +7,6 @@ cli_log は容量が大きすぎるため含めない。
 
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
 
 from pydantic import BaseModel
 

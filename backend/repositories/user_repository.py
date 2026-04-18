@@ -7,7 +7,6 @@ users テーブルへのデータアクセス処理を担当する。
 
 from typing import Optional
 
-from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from shared.models.db import User
