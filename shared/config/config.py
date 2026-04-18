@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     # GitLab ポーリング間隔（秒）
     polling_interval_seconds: int = 30
 
+    # GitLab ポーリング対象プロジェクトIDのカンマ区切りリスト
+    gitlab_project_ids: str = ""
+
     # ------------------------------------------------------------------
     # 進捗報告設定
     # ------------------------------------------------------------------
@@ -114,3 +117,28 @@ def get_settings() -> Settings:
         Settings: 設定インスタンス
     """
     return Settings()
+
+
+def get_project_ids(settings: Settings) -> list[int]:
+    """
+    gitlab_project_ids 文字列をパースして整数リストで返す。
+
+    空文字列の場合は空リストを返す。
+
+    Args:
+        settings: Settings インスタンス
+
+    Returns:
+        GitLabプロジェクトIDの整数リスト
+    """
+    if not settings.gitlab_project_ids.strip():
+        return []
+    ids: list[int] = []
+    for part in settings.gitlab_project_ids.split(","):
+        part = part.strip()
+        if part:
+            try:
+                ids.append(int(part))
+            except ValueError:
+                pass
+    return ids
