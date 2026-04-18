@@ -50,6 +50,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       network: host
+    image: ghcr.io/notfolder/codingagentautomata-backend:latest
     restart: always
     env_file:
       - .env
@@ -69,6 +70,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       network: host
+    image: ghcr.io/notfolder/codingagentautomata-frontend:latest
     restart: always
     ports:
       - "80:80"
@@ -85,6 +87,7 @@ services:
       context: .
       dockerfile: producer/Dockerfile
       network: host
+    image: ghcr.io/notfolder/codingagentautomata-producer:latest
     restart: always
     env_file:
       - .env
@@ -103,6 +106,7 @@ services:
       context: .
       dockerfile: consumer/Dockerfile
       network: host
+    image: ghcr.io/notfolder/codingagentautomata-consumer:latest
     restart: always
     env_file:
       - .env
@@ -122,6 +126,7 @@ services:
   mock_llm:
     build:
       context: mock-llm/
+    image: ghcr.io/notfolder/codingagentautomata-mock-llm:latest
     restart: always
     profiles:
       - test
