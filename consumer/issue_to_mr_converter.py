@@ -346,13 +346,20 @@ class IssueToMRConverter:
             if not lines:
                 raise ValueError("CLI が出力を生成しませんでした。")
 
-            last_line: str = lines[-1]
-            try:
-                result_json: dict = json.loads(last_line)
-            except json.JSONDecodeError as exc:
+            result_json: dict | None = None
+            for line in reversed(lines):
+                try:
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict) and "branch_name" in parsed:
+                        result_json = parsed
+                        break
+                except json.JSONDecodeError:
+                    continue
+            if result_json is None:
+                last_line: str = lines[-1] if lines else ""
                 raise ValueError(
-                    f"CLI の最終出力が JSON ではありません: '{last_line}'"
-                ) from exc
+                    f"CLI の出力に branch_name を含む JSON が見つかりません。最終行: '{last_line}'"
+                )
 
             branch_name: str = result_json.get("branch_name", "")
             mr_title: str = result_json.get("mr_title", "")
@@ -395,6 +402,12 @@ class IssueToMRConverter:
                 if author_info:
                     reviewer_ids = [author_info.get("id")]
 
+            # bot の GitLab ユーザー ID を取得（MR アサイニーに設定）
+            bot_user_info: Optional[dict] = self._gitlab_client.get_user_by_username(username)
+            bot_assignee_id: Optional[int] = (
+                bot_user_info.get("id") if bot_user_info else None
+            )
+
             # Draft MR を作成（Issue の description を MR description に設定）
             mr: Optional[dict] = self._gitlab_client.create_merge_request(
                 project_id=project_id,
@@ -404,6 +417,7 @@ class IssueToMRConverter:
                 description=issue.get("description", "") or "",
                 draft=True,
                 reviewer_ids=reviewer_ids if reviewer_ids else None,
+                assignee_id=bot_assignee_id,
                 label_ids=[self._settings.gitlab_bot_label],
             )
             if mr is None:

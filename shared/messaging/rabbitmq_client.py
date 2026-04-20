@@ -93,6 +93,7 @@ class RabbitMQClient:
 
         辞書をJSONシリアライズして送信する。
         メッセージの永続化（delivery_mode=2）を有効にする。
+        接続が切れていた場合は再接続してからリトライする。
 
         Args:
             message: 送信するメッセージ辞書
@@ -108,12 +109,23 @@ class RabbitMQClient:
         properties = pika.BasicProperties(
             delivery_mode=pika.DeliveryMode.Persistent,
         )
-        self._channel.basic_publish(
-            exchange="",
-            routing_key=self._queue_name,
-            body=body,
-            properties=properties,
-        )
+        try:
+            self._channel.basic_publish(
+                exchange="",
+                routing_key=self._queue_name,
+                body=body,
+                properties=properties,
+            )
+        except (pika.exceptions.StreamLostError, pika.exceptions.ConnectionClosedByBroker,
+                pika.exceptions.AMQPConnectionError, pika.exceptions.ChannelClosedByBroker):
+            logger.warning("RabbitMQ connection lost during publish, reconnecting...")
+            self.connect()
+            self._channel.basic_publish(
+                exchange="",
+                routing_key=self._queue_name,
+                body=body,
+                properties=properties,
+            )
         logger.debug("RabbitMQ published: queue=%s, message=%s", self._queue_name, message)
 
     def consume(self, callback: Callable[[dict], None]) -> None:

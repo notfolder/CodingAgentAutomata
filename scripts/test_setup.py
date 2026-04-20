@@ -303,6 +303,7 @@ def allow_local_requests(root_token: str) -> None:
     resp = _gitlab_api("PUT", "/application/settings", root_token, json={
         "allow_local_requests_from_hooks_and_services": True,
         "allow_local_requests_from_web_hooks_and_services": True,
+        "outbound_local_requests_allowlist": ["producer"],
     })
     if resp.status_code == 200:
         logger.info("ローカル Webhook リクエストを許可しました")
@@ -476,7 +477,7 @@ def setup_backend_users(virtual_keys: dict[str, str]) -> None:
 # .env.test 出力
 # -----------------------------------------------------------------------
 
-def save_env_test(root_token: str, bot_pat: str, project_id: str, user_pats: dict[str, str]) -> None:
+def save_env_test(root_token: str, bot_pat: str, project_id: str, user_pats: dict[str, str], virtual_keys: dict[str, str] | None = None) -> None:
     """.env.test ファイルにセットアップ結果を保存する
 
     Args:
@@ -484,10 +485,19 @@ def save_env_test(root_token: str, bot_pat: str, project_id: str, user_pats: dic
         bot_pat: bot ユーザーの PAT（GITLAB_PAT）
         project_id: テスト用プロジェクト ID
         user_pats: {username: user_pat} の辞書
+        virtual_keys: {username: virtual_key} の辞書（mock キー検出に使用）
     """
     # testuser-claude の PAT を GITLAB_USER_TOKEN として保存（E2E テストでの issue 作成に使用）
     user_token = user_pats.get("testuser-claude", "")
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env.test")
+    # Mock LLM キー（sk-mock-* プレフィックス）が使用されている場合、
+    # consumer が LiteLLM ではなく mock_llm サービスに直接接続するよう設定する
+    litellm_proxy_line = ""
+    use_mock_llm = virtual_keys and any(v.startswith("sk-mock-") for v in virtual_keys.values())
+    if use_mock_llm:
+        litellm_proxy_line = "\nLITELLM_PROXY_URL=http://mock_llm:4000"
+        logger.info("Mock LLM キーを検出: .env.test に LITELLM_PROXY_URL=http://mock_llm:4000 を設定します")
+
     content = f"""# E2E テスト用環境変数（scripts/test_setup.py が自動生成）
 GITLAB_API_URL={GITLAB_API_URL}
 GITLAB_ADMIN_TOKEN={root_token}
@@ -502,7 +512,8 @@ BACKEND_URL={BACKEND_URL}
 BASE_URL=http://localhost:80
 ADMIN_USERNAME={ADMIN_USERNAME}
 ADMIN_PASSWORD={ADMIN_PASSWORD}
-TEST_USER_PASSWORD=Test@123456
+TEST_USER_PASSWORD=Test@123456{litellm_proxy_line}
+PROGRESS_REPORT_INTERVAL_SEC=5
 """
     with open(env_path, "w") as f:
         f.write(content)
@@ -559,7 +570,7 @@ def main() -> None:
 
     # --- .env.test 出力 ---
     if root_token and project_id:
-        save_env_test(root_token, bot_pat, project_id, user_pats)
+        save_env_test(root_token, bot_pat, project_id, user_pats, virtual_keys=virtual_keys)
 
     logger.info("=" * 60)
     logger.info("テスト環境セットアップ完了！")

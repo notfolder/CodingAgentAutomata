@@ -34,6 +34,28 @@ services:
       start_period: 10s
 
   # -------------------------------------------------------
+  # PostgreSQL（LiteLLM 専用）
+  # backend/producer/consumer とは完全に分離した独立インスタンス
+  # -------------------------------------------------------
+  postgresql_litellm:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm_db
+    volumes:
+      - postgres_litellm_data:/var/lib/postgresql/data
+    networks:
+      - codingagent_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # -------------------------------------------------------
   # RabbitMQ メッセージキュー（管理UIあり）
   # -------------------------------------------------------
   rabbitmq:
@@ -165,6 +187,8 @@ services:
     environment:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://localhost:8929'
+        gitlab_rails['allow_local_requests_from_web_hooks_and_services'] = true
+        gitlab_rails['outbound_local_requests_allowlist'] = ['producer']
     ports:
       - "8929:8929"
     networks:
@@ -185,14 +209,14 @@ services:
     environment:
       # LiteLLM の Master Key（Virtual Key 発行・検証に使用）
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
-      # PostgreSQL への接続（Virtual Key 管理のために必要）
-      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgresql:5432/${POSTGRES_DB:-db}
+      # PostgreSQL への接続（litellm 専用 DB を使用）
+      DATABASE_URL: postgresql://litellm:litellm@postgresql_litellm:5432/litellm_db
     ports:
       - "4001:4000"
     volumes:
       - ./litellm/config.yml:/app/config.yml
     depends_on:
-      postgresql:
+      postgresql_litellm:
         condition: service_healthy
       mock_llm:
         condition: service_started
@@ -215,8 +239,8 @@ services:
     environment:
       # LiteLLM の Master Key（Virtual Key 発行・検証に使用）
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
-      # PostgreSQL への接続（Virtual Key 管理のために必要）
-      DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@postgresql:5432/${POSTGRES_DB:-db}
+      # PostgreSQL への接続（litellm 専用 DB を使用）
+      DATABASE_URL: postgresql://litellm:litellm@postgresql_litellm:5432/litellm_db
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     ports:
@@ -224,7 +248,8 @@ services:
     volumes:
       - ./litellm/config-real.yml:/app/config.yml
     depends_on:
-      - postgresql
+      postgresql_litellm:
+        condition: service_healthy
     networks:
       codingagent_net:
         # Consumer が常に "litellm" として名前解決できるようにネットワークエイリアスを設定
@@ -319,6 +344,8 @@ services:
 # =============================================================
 volumes:
   postgres_data:
+  # LiteLLM 専用 PostgreSQL のデータボリューム
+  postgres_litellm_data:
 
 # =============================================================
 # ネットワーク定義

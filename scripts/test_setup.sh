@@ -193,6 +193,10 @@ fi
 export WEBHOOK_URL="${WEBHOOK_URL:-http://producer:8080/webhook}"
 # test_setup.py はホストマシン上で実行するため localhost を使用する
 export BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
+# test_setup.py はホストマシン上で実行するため、LiteLLM / モック LLM はホスト公開ポートを使用する
+# （.env の Docker 内部 URL を上書き）
+export LITELLM_PROXY_URL="http://localhost:4001"
+export MOCK_LLM_URL="http://localhost:4000"
 
 "${VENV_DIR}/bin/python3" "${SCRIPT_DIR}/test_setup.py"
 

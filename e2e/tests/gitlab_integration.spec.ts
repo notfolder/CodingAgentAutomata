@@ -163,6 +163,30 @@ async function triggerIssue(
 }
 
 /**
+ * GitLab の MR にラベルとアサインを付与する（F-4 タスクトリガー操作）
+ */
+async function triggerMR(
+  projectId: string,
+  mrIid: number,
+  token: string,
+  assigneeUsername: string,
+  label: string
+): Promise<void> {
+  // アサイニーのユーザー ID を取得
+  const userResp = await gitlabApi('GET', `/users?username=${assigneeUsername}`, token);
+  const users = userResp.data as Array<{ id: number }>;
+  expect(users.length).toBeGreaterThan(0);
+  const assigneeId = users[0].id;
+
+  // ラベル付与 + アサイン
+  const resp = await gitlabApi('PUT', `/projects/${projectId}/merge_requests/${mrIid}`, token, {
+    assignee_ids: [assigneeId],
+    labels: label,
+  });
+  expect(resp.status).toBe(200);
+}
+
+/**
  * 指定条件が true になるまで待機するポーリングヘルパー
  */
 async function waitUntil(
@@ -577,7 +601,7 @@ test('T-28: MR処理中にCLI出力が進捗コメントに定期更新される
   expect(mr).not.toBeNull();
 
   // MR にトリガーを付与（F-4 処理開始）
-  await triggerIssue(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+  await triggerMR(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
 
   // 進捗コメントが投稿されるまで待つ（<details> 形式のコメント）
   const hasProgressComment = await waitForComment(
@@ -619,7 +643,7 @@ test('T-30: MR処理中にbotのアサインが解除されたらCLIが強制終
   expect(mr).not.toBeNull();
 
   // MR に bot をアサイン + ラベル付与（F-4 処理開始）
-  await triggerIssue(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+  await triggerMR(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
 
   // Consumer が処理を開始するまで少し待つ（進捗コメントが出たら処理開始の合図）
   await waitForComment(

@@ -55,17 +55,24 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         """POST /v1/chat/completions — ダミー応答を返す"""
         body = self._read_body()
         messages = body.get("messages", [])
-        last_user = next(
-            (m["content"] for m in reversed(messages) if m.get("role") == "user"),
-            "Hello",
-        )
-
+        
         # F-3 テンプレート用: branch_name / mr_title を含む JSON を返す
-        if "branch_name" in last_user or "MRタイトル" in last_user or "ブランチ名" in last_user:
+        branch_suffix = uuid.uuid4().hex[:8]
+        
+        # すべてのユーザーメッセージを集める（Claude CLIは複数回APIを呼ぶため）
+        all_user_content = " ".join(
+            m["content"] for m in messages 
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        )
+        
+        # F-3テンプレートを検出: "ブランチ名" と "MRタイトル" の両方を含む場合
+        is_f3_template = "ブランチ名" in all_user_content and "MRタイトル" in all_user_content
+        
+        if is_f3_template:
             content = (
                 'ブランチ名とMRタイトルを生成しました。\n'
-                '{"branch_name": "feature/mock-implementation", '
-                '"mr_title": "Draft: Mock implementation"}'
+                f'{{"branch_name": "feature/mock-{branch_suffix}", '
+                '"mr_title": "Draft: Mock implementation"}}'
             )
         else:
             content = "Mock LLM response: task completed successfully."
@@ -123,6 +130,122 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"status": "healthy", "litellm_version": "mock-1.0.0"})
 
     # -------------------------------------------------------------------------
+    # Anthropic 互換エンドポイント
+    # -------------------------------------------------------------------------
+
+    def _handle_messages(self) -> None:
+        """POST /v1/messages — Anthropic 形式のダミー応答を返す（SSE ストリーミング対応）"""
+        body = self._read_body()
+        messages = body.get("messages", [])
+
+        # 最初のユーザーメッセージを取得して F-3 か F-4 かを判定する
+        first_user = next(
+            (
+                m["content"] if isinstance(m["content"], str)
+                else (m["content"][0].get("text", "") if isinstance(m["content"], list) else "")
+                for m in messages if m.get("role") == "user"
+            ),
+            "",
+        )
+
+        # F-3 テンプレート用: branch_name / mr_title を含む JSON を返す
+        # F-3 プロンプトには 'branch_name' キーや "ブランチ名" / "MRタイトル" が含まれる
+        branch_suffix = uuid.uuid4().hex[:8]
+        is_f3 = (
+            "branch_name" in first_user
+            or "ブランチ名" in first_user
+            or "MRタイトル" in first_user
+        )
+        print(
+            f"[mock-llm] is_f3={is_f3} "
+            f"first_user_len={len(first_user)} "
+            f"first_user_snippet={first_user[:120]!r}",
+            flush=True,
+        )
+        if is_f3:
+            content = (
+                'ブランチ名とMRタイトルを生成しました。\n'
+                f'{{"branch_name": "feature/mock-{branch_suffix}", '
+                '"mr_title": "Draft: Mock implementation"}'
+            )
+            # F-3 は遅延なし
+            event_delay = 0.0
+        else:
+            # F-4 (MR処理): テスト用に各 SSE イベント間に遅延を入れ、CLI が十分な時間実行されるようにする
+            # PROGRESS_REPORT_INTERVAL_SEC=5 の 2 サイクル（10秒）より長く実行させることで
+            # T-30 の bot アサイン解除検知テストが正常動作する
+            content = "Mock LLM response: task completed successfully."
+            event_delay = 2.0
+
+        stream = body.get("stream", False)
+        msg_id = f"msg_{uuid.uuid4().hex[:8]}"
+        model = body.get("model", "claude-opus-4-5")
+
+        if stream:
+            # SSE ストリーミング応答 (Anthropic SDK が期待する形式)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+
+            def sse(event: str, data: dict) -> bytes:
+                line = f"event: {event}\ndata: {json.dumps(data)}\n\n"
+                return line.encode("utf-8")
+
+            events = [
+                sse("message_start", {
+                    "type": "message_start",
+                    "message": {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "model": model,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 100, "output_tokens": 0},
+                    },
+                }),
+                sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                }),
+                sse("ping", {"type": "ping"}),
+                sse("content_block_delta", {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": content},
+                }),
+                sse("content_block_stop", {
+                    "type": "content_block_stop",
+                    "index": 0,
+                }),
+                sse("message_delta", {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                }),
+                sse("message_stop", {"type": "message_stop"}),
+            ]
+            for chunk in events:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+                if event_delay > 0:
+                    time.sleep(event_delay)
+        else:
+            self._send_json(200, {
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": content}],
+                "model": model,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            })
+
+    # -------------------------------------------------------------------------
     # ルーティング
     # -------------------------------------------------------------------------
 
@@ -141,6 +264,8 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         """POST リクエストをルーティングする"""
         if self.path in ("/v1/chat/completions", "/chat/completions"):
             self._handle_chat_completions()
+        elif self.path.startswith("/v1/messages"):
+            self._handle_messages()
         elif self.path == "/key/generate":
             self._handle_key_generate()
         elif self.path == "/key/delete":
