@@ -2,11 +2,14 @@
 Consumer エントリーポイント・ConsumerWorker モジュール。
 
 RabbitMQ からタスクをデキューして TaskProcessor にディスパッチするワーカーを起動する。
+SIGTERM / SIGINT 受信時はグレースフルシャットダウンを行い、
+処理中のタスクを完了させてからプロセスを終了する。
 """
 
 import asyncio
 import logging
 import os
+import signal
 import sys
 
 # ロガー設定（標準出力に INFO 以上を出力）
@@ -24,6 +27,7 @@ class ConsumerWorker:
 
     RabbitMQClient の consume（ブロッキング）を実行し、
     メッセージ受信ごとに asyncio.run() で TaskProcessor.process を呼び出す。
+    SIGTERM 受信時は shutdown() を呼び出すことでグレースフルに停止する。
     """
 
     def __init__(self, rabbitmq_client, task_processor) -> None:
@@ -37,11 +41,22 @@ class ConsumerWorker:
         self._rabbitmq_client = rabbitmq_client
         self._task_processor = task_processor
 
+    def shutdown(self) -> None:
+        """
+        グレースフルシャットダウンを開始する。
+
+        RabbitMQ の consume ループに停止シグナルを送る。
+        現在処理中のタスクは完了まで待ってから停止する。
+        """
+        logger.info("ConsumerWorker: シャットダウン要求を受信しました。処理中タスクの完了を待ちます。")
+        self._rabbitmq_client.stop_consuming()
+
     def start(self) -> None:
         """
         RabbitMQ の consume を開始する（ブロッキング）。
 
         メッセージを受信するたびに TaskProcessor.process を asyncio.run() で実行する。
+        shutdown() が呼ばれると start_consuming() が戻り、このメソッドも終了する。
         """
         logger.info("ConsumerWorker: RabbitMQ consume を開始します")
 
@@ -166,10 +181,28 @@ async def main() -> None:
         task_processor=task_processor,
     )
 
+    # ------------------------------------------------------------------
+    # SIGTERM / SIGINT ハンドラ登録（グレースフルシャットダウン）
+    # シグナル受信時: RabbitMQ の consume ループを停止し、
+    # 処理中のタスクが完了してから run_in_executor が戻るのを待つ
+    # ------------------------------------------------------------------
+    def _handle_signal(sig, frame) -> None:
+        """SIGTERM / SIGINT を受信したときのシグナルハンドラ。"""
+        logger.info(
+            "Consumer: シグナル %s を受信しました。グレースフルシャットダウンを開始します。",
+            signal.Signals(sig).name,
+        )
+        worker.shutdown()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
     logger.info("Consumer を起動します")
     loop = asyncio.get_event_loop()
     # RabbitMQ のブロッキング consume をスレッド executor で実行
+    # shutdown() が呼ばれると start_consuming() が戻り、ここで await が完了する
     await loop.run_in_executor(None, worker.start)
+    logger.info("Consumer: タスク処理完了。プロセスを終了します。")
 
 
 if __name__ == "__main__":

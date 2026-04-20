@@ -143,6 +143,9 @@ services:
       network: host
     image: ghcr.io/notfolder/codingagentautomata-consumer:latest
     restart: always
+    # 処理中タスクの完了を待つためのグレースフルシャットダウン期間
+    # CLI_EXEC_TIMEOUT_SEC(90秒) + 余裕 → 120秒
+    stop_grace_period: 120s
     env_file:
       - .env
       - path: .env.test

@@ -165,6 +165,31 @@ class RabbitMQClient:
         logger.info("RabbitMQ start consuming: queue=%s", self._queue_name)
         self._channel.start_consuming()
 
+    def stop_consuming(self) -> None:
+        """
+        consumeループを停止するようシグナルを送る（スレッドセーフ）。
+
+        別スレッドから呼び出しても安全なように
+        connection.add_callback_threadsafe 経由で stop_consuming を実行する。
+        接続が存在しない場合は何もしない。
+        """
+        try:
+            if self._connection and self._connection.is_open and self._channel:
+                channel = self._channel
+
+                def _stop():
+                    """pikaのIOループスレッドで実行するstop_consuming。"""
+                    try:
+                        channel.stop_consuming()
+                        logger.info("RabbitMQ stop_consuming 完了")
+                    except Exception as exc:
+                        logger.warning("RabbitMQ stop_consuming 内部エラー（無視）: %s", exc)
+
+                self._connection.add_callback_threadsafe(_stop)
+                logger.info("RabbitMQ stop_consuming をリクエストしました")
+        except Exception as exc:
+            logger.warning("RabbitMQ stop_consuming エラー（無視）: %s", exc)
+
     def close(self) -> None:
         """
         RabbitMQ接続を安全にクローズする。
