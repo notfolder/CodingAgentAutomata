@@ -142,6 +142,8 @@ class CLIAdapterResolver:
         Returns:
             str: 変数展開済みの起動コマンド文字列
         """
+        import re as _re
+
         command: str = adapter.start_command_template
 
         # {prompt}, {model}, {mcp_config} を展開
@@ -150,8 +152,19 @@ class CLIAdapterResolver:
         mcp_config: str = info.get("mcp_config", "")
 
         command = command.replace("{prompt}", prompt)
+
+        # mcp_config が空（"{}" や "" など）の場合は --mcp-config 引数ごと削除する
+        # 空の MCP 設定を渡すと Claude CLI が "Invalid MCP configuration" エラーを出力して
+        # 処理を完了しなくなるため
+        if mcp_config and mcp_config.strip() not in ("{}", "null", ""):
+            command = command.replace("{mcp_config}", mcp_config)
+        else:
+            # --mcp-config '...' 全体を削除（シングルクォート内の値を含む）
+            command = _re.sub(r"\s*--mcp-config\s+'[^']*\{mcp_config\}[^']*'", "", command)
+            # プレースホルダーが残っている場合は削除
+            command = command.replace("{mcp_config}", "")
+
         command = command.replace("{model}", model)
-        command = command.replace("{mcp_config}", mcp_config)
 
         logger.debug(
             "CLIAdapterResolver.build_start_command: cli_id=%s", adapter.cli_id

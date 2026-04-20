@@ -139,18 +139,16 @@ class ProgressManager:
                     break
                 await asyncio.sleep(0.5)
             # 停止フラグが立っていても最後の更新は行う
-            if self._buffer:
-                await self._post_or_update()
+            # バッファが空でも「処理中...」コメントを投稿して CLI が動作中であることを示す
+            await self._post_or_update()
 
     async def _post_or_update(self) -> None:
         """
         GitLab コメントを作成または更新する。
 
         _note_id が None の場合は新規作成し、それ以外は既存コメントを更新する。
+        バッファが空の場合は「処理中...」メッセージを投稿する。
         """
-        if not self._buffer:
-            return
-
         body: str = self._build_comment_body()
         loop = asyncio.get_event_loop()
 
@@ -191,11 +189,24 @@ class ProgressManager:
 
         <details> 形式でサマリー（直近 SUMMARY_LINES 行）と
         全体出力（最大 BUFFER_MAX_LINES 行）を含む。
+        バッファが空の場合は「処理中...」メッセージを表示する。
 
         Returns:
             str: コメント本文（Markdown）
         """
         now_str: str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        if not self._buffer:
+            # バッファが空の場合は処理中メッセージを表示
+            body: str = (
+                f"<details>\n"
+                f"<summary>進捗状況（最終更新: {now_str}）\n\n"
+                f"処理中...\n"
+                f"</summary>\n\n"
+                f"CLI を実行中です。しばらくお待ちください...\n\n"
+                f"</details>"
+            )
+            return body
 
         # サマリー: 直近 SUMMARY_LINES 行
         summary_text: str = "\n".join(self._buffer[-self._summary_lines :])
@@ -203,7 +214,7 @@ class ProgressManager:
         # 全体出力: バッファ全行
         full_text: str = "\n".join(self._buffer)
 
-        body: str = (
+        body = (
             f"<details>\n"
             f"<summary>進捗状況（最終更新: {now_str}）\n\n"
             f"{summary_text}\n"

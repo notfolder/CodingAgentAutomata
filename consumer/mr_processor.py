@@ -106,9 +106,12 @@ class MRProcessor:
         """PAT を埋め込んだ git clone 用 URL を構築する（プロトコル://oauth2:PAT@ホスト/パス）。"""
         http_url: str = project_info.get("http_url_to_repo", "")
         parsed = urlparse(http_url)
-        # oauth2:PAT@host 形式で URL を再構築
+        # CLIコンテナはDockerネットワーク内で動作するため、外部URL（localhost等）ではなく
+        # 内部URL（settings.gitlab_api_url）のホスト/ポートを使用する
+        api_parsed = urlparse(self._settings.gitlab_api_url)
+        # oauth2:PAT@内部ホスト 形式で URL を再構築
         clone_url: str = (
-            f"{parsed.scheme}://oauth2:{pat}@{parsed.netloc}{parsed.path}"
+            f"{api_parsed.scheme}://oauth2:{pat}@{api_parsed.netloc}{parsed.path}"
         )
         return clone_url
 
@@ -200,6 +203,19 @@ class MRProcessor:
         10. 正常完了・異常終了後の後処理
         11. CLILogMasker で PAT マスク後に cli_log を DB 保存
         """
+        # 重複処理防止: すでに completed/failed のタスクはスキップ（stale requeue 対策）
+        with self._db_session_factory() as session:
+            existing_task: Optional[Task] = (
+                session.query(Task).filter(Task.task_uuid == task_uuid).first()
+            )
+            if existing_task and existing_task.status in ("completed", "failed"):
+                logger.warning(
+                    "MRProcessor: タスクはすでに %s のため処理をスキップします task_uuid=%s",
+                    existing_task.status,
+                    task_uuid,
+                )
+                return
+
         self._update_task_status(task_uuid, "running")
         container_id: Optional[str] = None
         cli_log_lines: list[str] = []
@@ -413,17 +429,46 @@ class MRProcessor:
             monitor_task = asyncio.create_task(_run_monitor())
 
             try:
-                # CLI タスクの完了 or タイムアウトを待つ
-                await asyncio.wait_for(cli_task, timeout=timeout_sec)
-                # CLI 完了後、他のタスクをキャンセル
-                progress_manager.stop()
-                monitor_task.cancel()
-                progress_task.cancel()
+                # CLI タスクと monitor タスクの先着完了を待つ
+                # monitor_task が先に完了した場合（bot がアサインから外れた）は
+                # cli_task をキャンセルして強制終了処理へ進む
+                done, _ = await asyncio.wait(
+                    {cli_task, monitor_task},
+                    timeout=timeout_sec,
+                )
 
-                # タスクの終了を待つ
-                for t in [progress_task, monitor_task]:
+                if not done:
+                    # タイムアウト: TimeoutError を手動で発生させる
+                    raise asyncio.TimeoutError()
+
+                if monitor_task in done and cli_task not in done:
+                    # monitor_task が先に完了（bot がアサインから外れた）
+                    # cli_task を中断する
+                    bot_removed_flag[0] = True
+                    cli_task.cancel()
+                    try:
+                        await cli_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                else:
+                    # cli_task が先に完了（または両方同時完了）
+                    # monitor_task が完了していれば bot_removed_flag を確認
+                    if monitor_task in done:
+                        bot_removed_flag[0] = True
+                    else:
+                        monitor_task.cancel()
+
+                # progress を停止
+                progress_manager.stop()
+                progress_task.cancel()
+                for t in [progress_task]:
                     try:
                         await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                if not monitor_task.done():
+                    try:
+                        await monitor_task
                     except (asyncio.CancelledError, Exception):
                         pass
 
@@ -478,7 +523,7 @@ class MRProcessor:
                 except Exception:
                     pass
 
-                unassign_msg = "🛑 bot がアサイニーから外されたため、処理を中断しました。変更内容を push しました。"
+                unassign_msg = "🛑 強制終了: bot がアサイニーから外されたため、CLI 処理を中断しました。変更内容を push しました。"
                 self._gitlab_client.create_merge_request_note(
                     project_id, mr_iid, unassign_msg
                 )

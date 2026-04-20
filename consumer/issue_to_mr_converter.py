@@ -403,7 +403,7 @@ class IssueToMRConverter:
                     reviewer_ids = [author_info.get("id")]
 
             # bot の GitLab ユーザー ID を取得（MR アサイニーに設定）
-            bot_user_info: Optional[dict] = self._gitlab_client.get_user_by_username(username)
+            bot_user_info: Optional[dict] = self._gitlab_client.get_user_by_username(self._settings.gitlab_bot_name)
             bot_assignee_id: Optional[int] = (
                 bot_user_info.get("id") if bot_user_info else None
             )

@@ -17,8 +17,13 @@ const llmMode = process.env.LLM_MODE ?? 'mock';
 
 export default defineConfig({
   testDir: './tests',
-  timeout: 60000,
+  timeout: 300000,
+  // Consumer はシングルスレッドで1タスクずつ処理するため、
+  // 並列実行するとキューが詰まり TASK_TIMEOUT_MS（120秒）でタイムアウトする。
+  // シリアル実行（workers=1）でキューバックログを防ぐ。
+  workers: 1,
   retries: 1,
+  globalSetup: './global-setup.ts',
   use: {
     // docker-compose 内では frontend サービス名でアクセス
     baseURL: process.env.BASE_URL ?? 'http://frontend:80',

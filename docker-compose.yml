@@ -150,6 +150,8 @@ services:
     environment:
       # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
       GITLAB_API_URL: http://gitlab:8929
+      # CLI 実行タイムアウトをテスト環境向けに短縮（デフォルト 3 時間 → 90 秒）
+      CLI_EXEC_TIMEOUT_SEC: "90"
     depends_on:
       - postgresql
       - rabbitmq
@@ -172,6 +174,10 @@ services:
       - test
     ports:
       - "4000:4000"
+    environment:
+      # F-4 (MR処理) のレスポンスに遅延を入れる
+      # monitor_assignees (5秒間隔) が bot のアサイン解除を検知できるようにする
+      MOCK_LLM_RESPONSE_DELAY_SEC: "20"
     networks:
       - codingagent_net
 

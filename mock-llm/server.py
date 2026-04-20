@@ -15,6 +15,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 PORT = int(os.environ.get("PORT", "4000"))
+RESPONSE_DELAY_SEC = float(os.environ.get("MOCK_LLM_RESPONSE_DELAY_SEC", "0"))
 
 # 発行済みキーの一覧（メモリ内管理）
 issued_keys: dict[str, dict] = {}
@@ -69,12 +70,18 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         is_f3_template = "ブランチ名" in all_user_content and "MRタイトル" in all_user_content
         
         if is_f3_template:
-            content = (
-                'ブランチ名とMRタイトルを生成しました。\n'
-                f'{{"branch_name": "feature/mock-{branch_suffix}", '
-                '"mr_title": "Draft: Mock implementation"}}'
+            # F-3 は consumer 側が行単位JSONを逆順探索するため、JSON文字列のみ返す
+            content = json.dumps(
+                {
+                    "branch_name": f"feature/mock-{branch_suffix}",
+                    "mr_title": "Draft: Mock implementation",
+                },
+                ensure_ascii=False,
             )
         else:
+            # F-4 用: 設定された遅延を入れる
+            if RESPONSE_DELAY_SEC > 0:
+                time.sleep(RESPONSE_DELAY_SEC)
             content = "Mock LLM response: task completed successfully."
 
         self._send_json(200, {
@@ -138,35 +145,43 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         body = self._read_body()
         messages = body.get("messages", [])
 
-        # 最初のユーザーメッセージを取得して F-3 か F-4 かを判定する
-        first_user = next(
-            (
-                m["content"] if isinstance(m["content"], str)
-                else (m["content"][0].get("text", "") if isinstance(m["content"], list) else "")
-                for m in messages if m.get("role") == "user"
-            ),
-            "",
-        )
+        # すべてのユーザーメッセージを連結して F-3 か F-4 かを判定する
+        # Claude CLI は複数回 API を呼ぶため first_user だけでは取りこぼす
+        user_texts: list[str] = []
+        for m in messages:
+            if m.get("role") != "user":
+                continue
+            content = m.get("content")
+            if isinstance(content, str):
+                user_texts.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        user_texts.append(item["text"])
+        all_user_content = "\n".join(user_texts)
 
         # F-3 テンプレート用: branch_name / mr_title を含む JSON を返す
         # F-3 プロンプトには 'branch_name' キーや "ブランチ名" / "MRタイトル" が含まれる
         branch_suffix = uuid.uuid4().hex[:8]
         is_f3 = (
-            "branch_name" in first_user
-            or "ブランチ名" in first_user
-            or "MRタイトル" in first_user
+            "branch_name" in all_user_content
+            or "ブランチ名" in all_user_content
+            or "MRタイトル" in all_user_content
         )
         print(
             f"[mock-llm] is_f3={is_f3} "
-            f"first_user_len={len(first_user)} "
-            f"first_user_snippet={first_user[:120]!r}",
+            f"all_user_len={len(all_user_content)} "
+            f"all_user_snippet={all_user_content[:120]!r}",
             flush=True,
         )
         if is_f3:
-            content = (
-                'ブランチ名とMRタイトルを生成しました。\n'
-                f'{{"branch_name": "feature/mock-{branch_suffix}", '
-                '"mr_title": "Draft: Mock implementation"}'
+            # F-3 は consumer 側が行単位JSONを逆順探索するため、JSON文字列のみ返す
+            content = json.dumps(
+                {
+                    "branch_name": f"feature/mock-{branch_suffix}",
+                    "mr_title": "Draft: Mock implementation",
+                },
+                ensure_ascii=False,
             )
             # F-3 は遅延なし
             event_delay = 0.0

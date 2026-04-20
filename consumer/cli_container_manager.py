@@ -106,20 +106,53 @@ class CLIContainerManager:
             container_name,
             image,
         )
-        container: docker.models.containers.Container = self._client.containers.run(
-            image=image,
-            name=container_name,
-            environment=env_vars,
-            command=command,
-            # DinD 構成のため privileged モードで起動
-            privileged=True,
-            # バックグラウンドで起動
-            detach=True,
-            # コンテナ終了後も自動削除しない（ログ取得のため残す）
-            remove=False,
-            # Consumer コンテナと同一ネットワークに接続（mock_llm/litellm へのサービス名解決のため）
-            network=self._cli_network if self._cli_network else None,
-        )
+        try:
+            container: docker.models.containers.Container = self._client.containers.run(
+                image=image,
+                name=container_name,
+                environment=env_vars,
+                command=command,
+                # DinD 構成のため privileged モードで起動
+                privileged=True,
+                # バックグラウンドで起動
+                detach=True,
+                # コンテナ終了後も自動削除しない（ログ取得のため残す）
+                remove=False,
+                # Consumer コンテナと同一ネットワークに接続（mock_llm/litellm へのサービス名解決のため）
+                network=self._cli_network if self._cli_network else None,
+            )
+        except docker.errors.APIError as exc:
+            # 同名コンテナが残存している場合（409 Conflict）は削除してリトライ
+            if exc.status_code == 409:
+                logger.warning(
+                    "CLIContainerManager.start_container: 同名コンテナ競合（409）のため既存コンテナを削除してリトライ name=%s",
+                    container_name,
+                )
+                try:
+                    old_container = self._client.containers.get(container_name)
+                    old_container.remove(force=True)
+                    logger.info(
+                        "CLIContainerManager.start_container: 既存コンテナを削除しました name=%s",
+                        container_name,
+                    )
+                except Exception as remove_exc:
+                    logger.warning(
+                        "CLIContainerManager.start_container: 既存コンテナ削除失敗 name=%s: %s",
+                        container_name,
+                        remove_exc,
+                    )
+                container = self._client.containers.run(
+                    image=image,
+                    name=container_name,
+                    environment=env_vars,
+                    command=command,
+                    privileged=True,
+                    detach=True,
+                    remove=False,
+                    network=self._cli_network if self._cli_network else None,
+                )
+            else:
+                raise
         logger.info(
             "CLIContainerManager.start_container: container_id=%s", container.id
         )
