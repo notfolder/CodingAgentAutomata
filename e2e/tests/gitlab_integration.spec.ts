@@ -92,15 +92,33 @@ async function backendLogin(username: string, password: string): Promise<string>
 }
 
 /**
- * Backend API のタスク一覧を取得する
+ * Backend API のタスク一覧を取得する。
+ * gitlab_project_id と source_iid はバックエンドAPIが未対応のため、
+ * 全件取得後にクライアント側でフィルタリングする。
  */
 async function getBackendTasks(token: string, params: Record<string, string> = {}): Promise<unknown[]> {
-  const query = new URLSearchParams(params).toString();
+  // API 非対応のパラメータをクライアントフィルタ用に分離
+  const { gitlab_project_id, source_iid, ...apiParams } = params;
+  const query = new URLSearchParams(apiParams).toString();
   const resp = await fetch(`${BACKEND_URL}/api/tasks${query ? '?' + query : ''}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const data = await resp.json() as { items: unknown[] };
-  return data.items ?? [];
+  let items: unknown[] = data.items ?? [];
+
+  // gitlab_project_id と source_iid はクライアント側でフィルタ
+  if (gitlab_project_id !== undefined) {
+    items = items.filter(
+      (t: unknown) => String((t as { gitlab_project_id: number }).gitlab_project_id) === gitlab_project_id
+    );
+  }
+  if (source_iid !== undefined) {
+    items = items.filter(
+      (t: unknown) => String((t as { source_iid: number }).source_iid) === source_iid
+    );
+  }
+
+  return items;
 }
 
 /**

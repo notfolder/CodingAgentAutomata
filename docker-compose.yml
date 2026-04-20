@@ -26,6 +26,12 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - codingagent_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   # -------------------------------------------------------
   # RabbitMQ メッセージキュー（管理UIあり）
@@ -57,8 +63,10 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - postgresql
-      - rabbitmq
+      postgresql:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
     networks:
       - codingagent_net
 
@@ -184,8 +192,10 @@ services:
     volumes:
       - ./litellm/config.yml:/app/config.yml
     depends_on:
-      - postgresql
-      - mock_llm
+      postgresql:
+        condition: service_healthy
+      mock_llm:
+        condition: service_started
     networks:
       - codingagent_net
 
