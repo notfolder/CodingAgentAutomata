@@ -315,7 +315,7 @@ class IssueToMRConverter:
                 container_name=container_name,
                 image=adapter.container_image,
                 env_vars=env_vars,
-                command=start_command,
+                command="sleep infinity",
             )
             logger.info(
                 "IssueToMRConverter: コンテナを起動しました container_id=%s", container_id
@@ -324,16 +324,20 @@ class IssueToMRConverter:
             # ==========================================
             # ステップ 6: CLI 実行・標準出力の最終行を JSON パース
             # ==========================================
-            # コンテナの終了を待つ（ブロッキング）
+            # exec_run でコンテナ内にてコマンドを実行（ENTRYPOINT をバイパス）
             import docker
             container = self._cli_container_manager._client.containers.get(
                 container_id
             )
-            container.wait()
-
-            # 全ログを取得
-            raw_logs: bytes = container.logs(stdout=True, stderr=True)
-            cli_output: str = raw_logs.decode("utf-8", errors="replace")
+            exec_result = container.exec_run(
+                cmd=["/bin/sh", "-c", start_command],
+                stdout=True,
+                stderr=True,
+                stream=False,
+            )
+            cli_output: str = exec_result.output.decode("utf-8", errors="replace") if exec_result.output else ""
+            # コンテナを停止
+            container.stop(timeout=5)
             logger.debug(
                 "IssueToMRConverter: CLI 出力を取得しました output_len=%d",
                 len(cli_output),

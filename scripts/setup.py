@@ -135,9 +135,12 @@ BUILTIN_ADAPTERS = [
     {
         "cli_id": "opencode",
         "container_image": "coding-agent-cli-exec-opencode:latest",
-        "start_command_template": 'opencode run "{prompt}" --model {model}',
+        # プロンプトは環境変数 OPENCODE_PROMPT 経由で渡すことで、
+        # 改行・ダブルクォートを含む文字列でも shlex.split が壊れないようにする。
+        "start_command_template": "sh -c 'opencode run \"$OPENCODE_PROMPT\" --model {model}'",
         "env_mappings": json.dumps({
             "llm_api_key": "OPENAI_API_KEY",
+            "prompt": "OPENCODE_PROMPT",
         }),
         "config_content_env": "OPENCODE_CONFIG_CONTENT",
         "is_builtin": True,

@@ -151,7 +151,11 @@ class CLIAdapterResolver:
         model: str = info.get("model", "")
         mcp_config: str = info.get("mcp_config", "")
 
-        command = command.replace("{prompt}", prompt)
+        # shlex.split でクォートが壊れないようにプロンプトをエスケープする。
+        # テンプレート内で {prompt} がダブルクォートで囲まれている場合（例: "{prompt}"）、
+        # プロンプト内のバックスラッシュとダブルクォートをエスケープする。
+        prompt_escaped = prompt.replace("\\", "\\\\").replace('"', '\\"')
+        command = command.replace("{prompt}", prompt_escaped)
 
         # mcp_config が空（"{}" や "" など）の場合は --mcp-config 引数ごと削除する
         # 空の MCP 設定を渡すと Claude CLI が "Invalid MCP configuration" エラーを出力して

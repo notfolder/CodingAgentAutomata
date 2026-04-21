@@ -15,6 +15,8 @@
  *   T-24: Webhook とポーリングが同時検出しても重複処理されない
  *   T-28: MR 処理中に CLI 出力が進捗コメントに定期更新される
  *   T-30: MR 処理中に bot のアサインが解除されたら CLI が強制終了する
+ *   T-31: testuser-opencode の Issue を opencode CLI で MR 変換できる
+ *   T-32: testuser-opencode の MR を opencode CLI で処理できる
  *
  * 前提条件:
  *   - docker compose --profile test up -d で GitLab CE が起動済み
@@ -36,6 +38,8 @@ const GITLAB_API_URL = process.env.GITLAB_API_URL ?? 'http://localhost:8929';
 const GITLAB_ADMIN_TOKEN = process.env.GITLAB_ADMIN_TOKEN ?? '';
 // テストユーザー（testuser-claude）の GitLab PAT。Issue 作成者として backend の users テーブルに存在するユーザーを使う
 const GITLAB_USER_TOKEN = process.env.GITLAB_USER_TOKEN ?? '';
+// テストユーザー（testuser-opencode）の GitLab PAT。opencode CLI テスト用
+const GITLAB_USER_TOKEN_OPENCODE = process.env.GITLAB_USER_TOKEN_OPENCODE ?? '';
 const GITLAB_BOT_NAME = process.env.GITLAB_BOT_NAME ?? 'coding-agent-bot';
 const GITLAB_BOT_LABEL = process.env.GITLAB_BOT_LABEL ?? 'coding agent';
 const GITLAB_PROJECT_ID = process.env.GITLAB_PROJECT_ID ?? '';
@@ -279,6 +283,12 @@ test.beforeAll(async () => {
   if (!GITLAB_USER_TOKEN) {
     throw new Error(
       'GITLAB_USER_TOKEN が未設定です（testuser-claude の GitLab PAT）。\n' +
+      'テスト実行前に scripts/test_setup.sh を実行してください。'
+    );
+  }
+  if (!GITLAB_USER_TOKEN_OPENCODE) {
+    throw new Error(
+      'GITLAB_USER_TOKEN_OPENCODE が未設定です（testuser-opencode の GitLab PAT）。\n' +
       'テスト実行前に scripts/test_setup.sh を実行してください。'
     );
   }
@@ -673,4 +683,77 @@ test('T-30: MR処理中にbotのアサインが解除されたらCLIが強制終
     30_000
   );
   expect(hasForceStopComment).toBe(true);
+});
+
+// -----------------------------------------------------------------------
+// T-31: testuser-opencode の Issue を opencode CLI で MR 変換できる
+// -----------------------------------------------------------------------
+
+test('T-31: testuser-opencodeのIssueをopencode CLIでMR変換できる', async () => {
+  const projectId = GITLAB_PROJECT_ID;
+  const issueSuffix = Date.now();
+  const issueTitle = `[E2E T-31] opencode MR変換テスト ${issueSuffix}`;
+
+  // testuser-opencode として Issue を作成（バックエンドの users テーブルに opencode ユーザーとして登録済み）
+  const issue = await createIssue(
+    projectId, GITLAB_USER_TOKEN_OPENCODE, issueTitle,
+    'E2E テスト: opencode CLI で Issue を MR 変換することを確認する'
+  );
+
+  // bot アサイン + ラベル付与（admin 権限で実施）
+  await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+  // Backend タスクが completed になるまで待つ（既存 MR の誤検知を避けるため waitForMR の代わりに使用）
+  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  const completed = await waitForTaskStatus(
+    adminToken, projectId, String(issue.iid), 'completed', TASK_TIMEOUT_MS
+  );
+  expect(completed).toBe(true);
+
+  // Issue に MR リンクのコメントが投稿されていることを確認
+  const commented = await waitForComment(
+    projectId, 'issues', issue.iid, GITLAB_ADMIN_TOKEN, 'MR', TASK_TIMEOUT_MS
+  );
+  expect(commented).toBe(true);
+});
+
+// -----------------------------------------------------------------------
+// T-32: testuser-opencode の MR を opencode CLI で処理できる
+// -----------------------------------------------------------------------
+
+test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () => {
+  const projectId = GITLAB_PROJECT_ID;
+  const issueSuffix = Date.now();
+
+  // testuser-opencode として Issue を作成して MR に変換する
+  const issue = await createIssue(
+    projectId, GITLAB_USER_TOKEN_OPENCODE,
+    `[E2E T-32] opencode MR処理テスト ${issueSuffix}`,
+    'E2E テスト: opencode CLI で MR を処理することを確認する'
+  );
+  // bot アサイン + ラベル付与（admin 権限で実施）
+  await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+  // MR が作成されるまで待つ
+  const mr = await waitForMR(projectId, GITLAB_ADMIN_TOKEN, /.*/, TASK_TIMEOUT_MS);
+  expect(mr).not.toBeNull();
+
+  // MR に bot をアサイン + ラベル付与（F-4: MR CLI 処理開始）
+  await triggerMR(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+  // 進捗コメントが投稿されるまで待つ（<details> タグを含む進捗コメント）
+  const hasProgressComment = await waitForComment(
+    projectId, 'merge_requests', mr!.iid, GITLAB_ADMIN_TOKEN,
+    '<details>',
+    TASK_TIMEOUT_MS
+  );
+  expect(hasProgressComment).toBe(true);
+
+  // 処理完了後の完了コメントを確認
+  const hasCompletionComment = await waitForComment(
+    projectId, 'merge_requests', mr!.iid, GITLAB_ADMIN_TOKEN,
+    '完了',
+    TASK_TIMEOUT_MS
+  );
+  expect(hasCompletionComment).toBe(true);
 });

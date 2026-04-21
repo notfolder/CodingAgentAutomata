@@ -489,6 +489,8 @@ def save_env_test(root_token: str, bot_pat: str, project_id: str, user_pats: dic
     """
     # testuser-claude の PAT を GITLAB_USER_TOKEN として保存（E2E テストでの issue 作成に使用）
     user_token = user_pats.get("testuser-claude", "")
+    # testuser-opencode の PAT を GITLAB_USER_TOKEN_OPENCODE として保存（opencode E2E テストに使用）
+    user_token_opencode = user_pats.get("testuser-opencode", "")
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env.test")
     # Mock LLM キー（sk-mock-* プレフィックス）が使用されている場合、
     # consumer が LiteLLM ではなく mock_llm サービスに直接接続するよう設定する
@@ -503,6 +505,7 @@ GITLAB_API_URL={GITLAB_API_URL}
 GITLAB_ADMIN_TOKEN={root_token}
 GITLAB_PAT={bot_pat}
 GITLAB_USER_TOKEN={user_token}
+GITLAB_USER_TOKEN_OPENCODE={user_token_opencode}
 GITLAB_BOT_NAME={BOT_USERNAME}
 GITLAB_BOT_LABEL={BOT_LABEL}
 GITLAB_PROJECT_ID={project_id}
