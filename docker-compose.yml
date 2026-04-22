@@ -286,6 +286,9 @@ services:
       GITLAB_API_URL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
       BASE_URL: http://frontend:80
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
+      RABBITMQ_MGMT_URL: http://rabbitmq:15672
     volumes:
       - ./e2e:/e2e
     networks:

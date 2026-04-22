@@ -150,6 +150,9 @@ class IssueToMRConverter:
             mcp_config.update(user.user_mcp_config)
 
         # Claude Code CLI は {"mcpServers": {...}} 形式を要求するため、mcpServers キーでラップして返す
+        # mcpServers が空の場合は "{}" を返して --mcp-config 引数を省略させる
+        if not mcp_config:
+            return "{}"
         return json.dumps({"mcpServers": mcp_config}, ensure_ascii=False)
 
     def convert(
@@ -329,6 +332,9 @@ class IssueToMRConverter:
             container = self._cli_container_manager._client.containers.get(
                 container_id
             )
+            logger.debug(
+                "IssueToMRConverter: start_command=%r", start_command
+            )
             exec_result = container.exec_run(
                 cmd=["/bin/sh", "-c", start_command],
                 stdout=True,
@@ -339,8 +345,9 @@ class IssueToMRConverter:
             # コンテナを停止
             container.stop(timeout=5)
             logger.debug(
-                "IssueToMRConverter: CLI 出力を取得しました output_len=%d",
-                len(cli_output),
+                "IssueToMRConverter: CLI 出力 exit_code=%s output=%r",
+                exec_result.exit_code,
+                cli_output[:500],
             )
 
             # 最終行を JSON パース（branch_name, mr_title を取得）

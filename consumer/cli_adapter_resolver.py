@@ -89,16 +89,32 @@ class CLIAdapterResolver:
         # config_content_env が設定されている場合は JSON 形式でまとめてセット（opencode 向け）
         if adapter.config_content_env:
             config_content: dict = {}
-            # LiteLLM ベースURLを設定
+            # LiteLLM ベースURLを opencode の provider.{provider_id}.options.baseURL 形式で設定
+            # opencode の設定スキーマではルートレベルに "baseURL" キーは使えないため、
+            # provider セクションにネストして渡す必要がある
             if info.get("llm_base_url"):
-                config_content["baseURL"] = info["llm_base_url"]
-            # MCP 設定を設定
+                # model 値（例: "openai/gpt-4o"）の "/" 前部分をプロバイダーIDとして使用
+                model_str: str = info.get("model", "openai/gpt-4o")
+                provider_id: str = (
+                    model_str.split("/")[0] if "/" in model_str else "openai"
+                )
+                config_content["provider"] = {
+                    provider_id: {
+                        "options": {
+                            "baseURL": info["llm_base_url"],
+                        }
+                    }
+                }
+            # MCP 設定を opencode の "mcp" キーで設定
+            # opencode ではルートレベルに "mcpServers" キーは使えず "mcp" を使う
             if info.get("mcp_config"):
                 try:
                     mcp_parsed = json.loads(info["mcp_config"])
                     # _build_mcp_config は {"mcpServers": {...}} 形式で返すため
-                    # mcpServers キーを取り出して設定する（二重ラップを防ぐ）
-                    config_content["mcpServers"] = mcp_parsed.get("mcpServers", {})
+                    # "mcp" キーに変換して設定する（opencode 仕様）
+                    mcp_servers = mcp_parsed.get("mcpServers", {})
+                    if mcp_servers:
+                        config_content["mcp"] = mcp_servers
                 except (json.JSONDecodeError, TypeError):
                     logger.warning(
                         "CLIAdapterResolver: mcp_config の JSON パースに失敗しました"
@@ -153,8 +169,17 @@ class CLIAdapterResolver:
 
         # shlex.split でクォートが壊れないようにプロンプトをエスケープする。
         # テンプレート内で {prompt} がダブルクォートで囲まれている場合（例: "{prompt}"）、
-        # プロンプト内のバックスラッシュとダブルクォートをエスケープする。
-        prompt_escaped = prompt.replace("\\", "\\\\").replace('"', '\\"')
+        # プロンプト内のシェル特殊文字をエスケープする。
+        # - バックスラッシュ・ダブルクォート・バックティック（`）・ドル記号（$）を対象とする。
+        # バックティックは /bin/sh でコマンド置換として解釈されるため必須。
+        # ドル記号は変数展開 ${...} / $(...)  として解釈されるため必須。
+        prompt_escaped = (
+            prompt
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("`", "\\`")
+            .replace("$", "\\$")
+        )
         command = command.replace("{prompt}", prompt_escaped)
 
         # mcp_config が空（"{}" や "" など）の場合は --mcp-config 引数ごと削除する

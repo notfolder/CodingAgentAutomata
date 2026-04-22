@@ -201,6 +201,7 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
             self.end_headers()
 
             def sse(event: str, data: dict) -> bytes:
@@ -272,8 +273,151 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             self._handle_models()
         elif self.path.startswith("/key/info"):
             self._handle_key_info()
+        elif self.path.startswith("/responses/") or self.path.startswith("/v1/responses/"):
+            # Responses API の GET（ID 指定）は 404 を返す（opencode は使用しないが念のため）
+            self._send_json(404, {"error": "Not found"})
         else:
             self._send_json(404, {"error": f"Not found: {self.path}"})
+
+    def _handle_responses(self) -> None:
+        """POST /responses — OpenAI Responses API 互換のダミー応答を返す（SSE ストリーミング対応）"""
+        body = self._read_body()
+
+        # リクエストから input テキストを取得（F-3 / F-4 の判定に使用）
+        input_data = body.get("input", "")
+        if isinstance(input_data, list):
+            # input が配列の場合はテキストを連結
+            input_texts = []
+            for item in input_data:
+                if isinstance(item, dict):
+                    content = item.get("content", "")
+                    if isinstance(content, str):
+                        input_texts.append(content)
+                    elif isinstance(content, list):
+                        for c in content:
+                            if isinstance(c, dict) and c.get("type") == "input_text":
+                                input_texts.append(c.get("text", ""))
+            all_input = " ".join(input_texts)
+        elif isinstance(input_data, str):
+            all_input = input_data
+        else:
+            all_input = ""
+
+        # instructions も合わせて F-3 判定に使用
+        instructions = body.get("instructions", "") or ""
+        all_text = all_input + " " + instructions
+
+        # F-3 検出: branch_name / ブランチ名 / MRタイトル を含む場合
+        branch_suffix = uuid.uuid4().hex[:8]
+        is_f3 = (
+            "branch_name" in all_text
+            or "ブランチ名" in all_text
+            or "MRタイトル" in all_text
+        )
+
+        if is_f3:
+            content = json.dumps(
+                {
+                    "branch_name": f"feature/mock-{branch_suffix}",
+                    "mr_title": "Draft: Mock implementation",
+                },
+                ensure_ascii=False,
+            )
+            event_delay = 0.0
+        else:
+            # F-4 用: テスト用に遅延を入れる
+            if RESPONSE_DELAY_SEC > 0:
+                time.sleep(RESPONSE_DELAY_SEC)
+            content = "Mock LLM response: task completed successfully."
+            event_delay = 0.0
+
+        resp_id = f"resp_{uuid.uuid4().hex[:24]}"
+        msg_id = f"msg_{uuid.uuid4().hex[:8]}"
+        model = body.get("model", "gpt-4o")
+        created_at = int(time.time())
+
+        stream = body.get("stream", False)
+
+        response_base = {
+            "id": resp_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "completed",
+            "completed_at": created_at + 1,
+            "error": None,
+            "incomplete_details": None,
+            "instructions": body.get("instructions"),
+            "max_output_tokens": body.get("max_output_tokens"),
+            "model": model,
+            "output": [
+                {
+                    "id": msg_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": content,
+                            "annotations": [],
+                        }
+                    ],
+                }
+            ],
+            "output_text": content,
+            "parallel_tool_calls": True,
+            "previous_response_id": None,
+            "reasoning": {"effort": None, "summary": None},
+            "store": False,
+            "temperature": body.get("temperature", 1),
+            "text": {"format": {"type": "text"}},
+            "tool_choice": "auto",
+            "tools": [],
+            "top_p": body.get("top_p", 1),
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 100,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 50,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 150,
+            },
+            "user": None,
+            "metadata": {},
+        }
+
+        if stream:
+            # SSE ストリーミング応答（Responses API 形式）
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            seq = 1
+
+            def sse(data: dict) -> bytes:
+                line = f"data: {json.dumps(data)}\n\n"
+                return line.encode("utf-8")
+
+            events = [
+                sse({"type": "response.created", "response": {**response_base, "status": "in_progress", "completed_at": None, "output": []}, "sequence_number": seq}),
+                sse({"type": "response.in_progress", "response": {**response_base, "status": "in_progress", "completed_at": None, "output": []}, "sequence_number": seq + 1}),
+                sse({"type": "response.output_item.added", "output_index": 0, "item": {"id": msg_id, "type": "message", "role": "assistant", "status": "in_progress", "content": []}, "sequence_number": seq + 2}),
+                sse({"type": "response.content_part.added", "item_id": msg_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}, "sequence_number": seq + 3}),
+                sse({"type": "response.output_text.delta", "item_id": msg_id, "output_index": 0, "content_index": 0, "delta": content, "sequence_number": seq + 4}),
+                sse({"type": "response.output_text.done", "item_id": msg_id, "output_index": 0, "content_index": 0, "text": content, "sequence_number": seq + 5}),
+                sse({"type": "response.content_part.done", "item_id": msg_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": content, "annotations": []}, "sequence_number": seq + 6}),
+                sse({"type": "response.output_item.done", "output_index": 0, "item": {"id": msg_id, "type": "message", "role": "assistant", "status": "completed", "content": [{"type": "output_text", "text": content, "annotations": []}]}, "sequence_number": seq + 7}),
+                sse({"type": "response.completed", "response": response_base, "sequence_number": seq + 8}),
+            ]
+            for chunk in events:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+                if event_delay > 0:
+                    time.sleep(event_delay)
+        else:
+            self._send_json(200, response_base)
 
     def do_POST(self) -> None:
         """POST リクエストをルーティングする"""
@@ -281,6 +425,9 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             self._handle_chat_completions()
         elif self.path.startswith("/v1/messages"):
             self._handle_messages()
+        elif self.path in ("/responses", "/v1/responses"):
+            # OpenAI Responses API エンドポイント（opencode が使用）
+            self._handle_responses()
         elif self.path == "/key/generate":
             self._handle_key_generate()
         elif self.path == "/key/delete":

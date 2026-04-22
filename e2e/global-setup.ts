@@ -2,10 +2,36 @@
  * Playwright グローバルセットアップ
  *
  * 全テスト実行前に GitLab のオープン MR をすべてクローズし、
+ * RabbitMQ の tasks キューをパージして、
  * テスト間のデータ混入（waitForMR が過去のMRを掴む問題）を防ぐ。
  */
 
 import { request } from '@playwright/test';
+
+async function purgeRabbitMQQueue(): Promise<void> {
+  const RABBITMQ_USER = process.env.RABBITMQ_DEFAULT_USER ?? 'guest';
+  const RABBITMQ_PASS = process.env.RABBITMQ_DEFAULT_PASS ?? 'guest';
+  const RABBITMQ_MGMT_URL = process.env.RABBITMQ_MGMT_URL ?? 'http://rabbitmq:15672';
+  const QUEUE_NAME = 'tasks';
+
+  const mgmtContext = await request.newContext({ baseURL: RABBITMQ_MGMT_URL });
+  try {
+    const auth = Buffer.from(`${RABBITMQ_USER}:${RABBITMQ_PASS}`).toString('base64');
+    const resp = await mgmtContext.delete(
+      `/api/queues/%2F/${QUEUE_NAME}/contents`,
+      { headers: { 'Authorization': `Basic ${auth}` } }
+    );
+    if (resp.status() === 204 || resp.status() === 200) {
+      console.log(`[globalSetup] RabbitMQ キュー "${QUEUE_NAME}" をパージしました`);
+    } else {
+      console.log(`[globalSetup] RabbitMQ キューパージ: status=${resp.status()} (無視)`);
+    }
+  } catch (e) {
+    console.log('[globalSetup] RabbitMQ キューパージに失敗しました（無視）:', e);
+  } finally {
+    await mgmtContext.dispose();
+  }
+}
 
 async function globalSetup(): Promise<void> {
   const GITLAB_API_URL = process.env.GITLAB_API_URL ?? 'http://gitlab:8929';
@@ -16,6 +42,9 @@ async function globalSetup(): Promise<void> {
     console.log('[globalSetup] GITLAB_ADMIN_TOKEN または GITLAB_PROJECT_ID が未設定のためスキップします');
     return;
   }
+
+  // RabbitMQ キューをパージして古いタスクをクリア
+  await purgeRabbitMQQueue();
 
   const apiContext = await request.newContext({ baseURL: GITLAB_API_URL });
 

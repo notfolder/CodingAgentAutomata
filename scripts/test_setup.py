@@ -99,10 +99,21 @@ TEST_USERS = [
 # -----------------------------------------------------------------------
 
 def _gitlab_api(method: str, path: str, token: str, **kwargs) -> requests.Response:
-    """GitLab API 呼び出しのラッパー"""
+    """GitLab API 呼び出しのラッパー（502 は最大 5 回・最大 120 秒リトライ）"""
     url = f"{GITLAB_API_URL}/api/v4{path}"
     headers = {"PRIVATE-TOKEN": token, "Content-Type": "application/json"}
-    return requests.request(method, url, headers=headers, timeout=30, **kwargs)
+    last_resp = None
+    for attempt in range(5):
+        last_resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+        if last_resp.status_code != 502:
+            return last_resp
+        wait = min(15 * (attempt + 1), 60)
+        logger.info(
+            "GitLab API 502 応答 (%s %s)。%d 秒後にリトライ... (%d/5)",
+            method, path, wait, attempt + 1,
+        )
+        time.sleep(wait)
+    return last_resp  # type: ignore[return-value]
 
 
 def _litellm_api(method: str, path: str, base_url: str, master_key: str, **kwargs) -> requests.Response:
@@ -126,26 +137,49 @@ def _backend_api(method: str, path: str, token: str = "", **kwargs) -> requests.
 # -----------------------------------------------------------------------
 
 def wait_for_gitlab(max_wait: int = 600) -> bool:
-    """GitLab CE が起動して API が応答するまで待機する（最大 max_wait 秒）"""
+    """GitLab CE が起動して API が完全に応答するまで待機する（最大 max_wait 秒）"""
     logger.info("GitLab CE の起動を待機中... (最大 %d 秒)", max_wait)
     start = time.time()
     while time.time() - start < max_wait:
         try:
-            # /-/health が 200 の場合は確実に起動済み
-            resp = requests.get(f"{GITLAB_API_URL}/-/health", timeout=5)
-            if resp.status_code == 200:
-                logger.info("GitLab CE が起動しました（/-/health 200）(%.0f 秒)", time.time() - start)
-                return True
-            # /-/health が 404 の場合は GitLab バージョンによりエンドポイント未存在 → API で確認
-            if resp.status_code == 404:
-                resp2 = requests.get(f"{GITLAB_API_URL}/api/v4/version", timeout=5)
-                if resp2.status_code in (200, 401):
-                    logger.info("GitLab CE が起動しました（API 応答確認）(%.0f 秒)", time.time() - start)
+            # /-/readiness?all=1 は全コンポーネントが準備完了で 200 を返す
+            try:
+                ready_resp = requests.get(f"{GITLAB_API_URL}/-/readiness?all=1", timeout=10)
+                if ready_resp.status_code == 200:
+                    logger.info("GitLab CE が起動しました（/-/readiness 200）(%.0f 秒)", time.time() - start)
                     return True
+            except Exception:
+                pass
+
+            # /-/health が利用可能な場合は確認
+            try:
+                health_resp = requests.get(f"{GITLAB_API_URL}/-/health", timeout=5)
+                if health_resp.status_code == 200:
+                    # /-/health OK でも API がまだ 502 の場合があるため projects エンドポイントも確認
+                    proj_resp = requests.get(f"{GITLAB_API_URL}/api/v4/projects", timeout=5)
+                    if proj_resp.status_code not in (502, 503):
+                        logger.info("GitLab CE が起動しました（/-/health + API 確認）(%.0f 秒)", time.time() - start)
+                        return True
+            except Exception:
+                pass
+
+            # /-/readiness と /-/health が 404 の GitLab バージョン向けフォールバック:
+            # /api/v4/projects が DB 層まで含めて正常応答（200/401 等）すれば起動済みとみなす
+            try:
+                proj_resp = requests.get(f"{GITLAB_API_URL}/api/v4/projects", timeout=10)
+                if proj_resp.status_code not in (502, 503):
+                    logger.info(
+                        "GitLab CE が起動しました（/api/v4/projects HTTP %d）(%.0f 秒)",
+                        proj_resp.status_code, time.time() - start,
+                    )
+                    return True
+            except Exception:
+                pass
+
         except Exception:
             pass
         elapsed = int(time.time() - start)
-        if elapsed % 60 == 0 and elapsed > 0:
+        if elapsed % 30 == 0 and elapsed > 0:
             logger.info("  ... %d 秒経過", elapsed)
         time.sleep(10)
     return False
