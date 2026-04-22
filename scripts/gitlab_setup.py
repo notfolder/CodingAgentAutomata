@@ -59,7 +59,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User OpenCode",
         "default_cli": "opencode",
-        "default_model": "openai/gpt-4o",
+        "default_model": "openai/gpt-4o-mini",
     },
     {
         "username": "testuser-claude",
@@ -67,7 +67,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User Claude",
         "default_cli": "claude",
-        "default_model": "claude-opus-4-5",
+        "default_model": "claude-3-haiku-20240307",
     },
 ]
 

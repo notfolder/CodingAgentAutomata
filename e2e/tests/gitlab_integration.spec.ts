@@ -508,7 +508,7 @@ test('T-13: 無効化ユーザーのIssueは処理されない', async () => {
       password: 'Test@123456',
       virtual_key: 'sk-mock-disabled-key',
       default_cli: 'claude',
-      default_model: 'claude-opus-4-5',
+      default_model: 'claude-3-haiku-20240307',
       role: 'user',
     }),
   });

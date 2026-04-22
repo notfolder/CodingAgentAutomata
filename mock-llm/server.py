@@ -88,7 +88,7 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": body.get("model", "gpt-4o"),
+            "model": body.get("model", "gpt-4o-mini"),
             "choices": [
                 {
                     "index": 0,
@@ -104,9 +104,9 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         self._send_json(200, {
             "object": "list",
             "data": [
-                {"id": "gpt-4o", "object": "model", "created": 1706037612, "owned_by": "openai"},
-                {"id": "claude-opus-4-5", "object": "model", "created": 1706037612, "owned_by": "anthropic"},
-                {"id": "openai/gpt-4o", "object": "model", "created": 1706037612, "owned_by": "openai"},
+                {"id": "gpt-4o-mini", "object": "model", "created": 1706037612, "owned_by": "openai"},
+                {"id": "claude-3-haiku-20240307", "object": "model", "created": 1706037612, "owned_by": "anthropic"},
+                {"id": "openai/gpt-4o-mini", "object": "model", "created": 1706037612, "owned_by": "openai"},
             ],
         })
 
@@ -130,7 +130,7 @@ class MockLLMHandler(BaseHTTPRequestHandler):
 
     def _handle_key_info(self) -> None:
         """GET /key/info — キー情報を返す"""
-        self._send_json(200, {"key": "mock", "models": ["gpt-4o", "claude-opus-4-5"]})
+        self._send_json(200, {"key": "mock", "models": ["gpt-4o-mini", "claude-3-haiku-20240307"]})
 
     def _handle_health(self) -> None:
         """GET /health — ヘルスチェック"""
@@ -333,7 +333,7 @@ class MockLLMHandler(BaseHTTPRequestHandler):
 
         resp_id = f"resp_{uuid.uuid4().hex[:24]}"
         msg_id = f"msg_{uuid.uuid4().hex[:8]}"
-        model = body.get("model", "gpt-4o")
+        model = body.get("model", "gpt-4o-mini")
         created_at = int(time.time())
 
         stream = body.get("stream", False)

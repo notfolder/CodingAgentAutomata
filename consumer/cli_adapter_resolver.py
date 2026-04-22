@@ -94,7 +94,7 @@ class CLIAdapterResolver:
             # provider セクションにネストして渡す必要がある
             if info.get("llm_base_url"):
                 # model 値（例: "openai/gpt-4o"）の "/" 前部分をプロバイダーIDとして使用
-                model_str: str = info.get("model", "openai/gpt-4o")
+                model_str: str = info.get("model", "openai/gpt-4o-mini")
                 provider_id: str = (
                     model_str.split("/")[0] if "/" in model_str else "openai"
                 )

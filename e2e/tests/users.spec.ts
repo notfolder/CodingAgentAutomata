@@ -58,10 +58,7 @@ test('T-01: 管理者が新規ユーザーを登録できる', async ({ page }) 
   await page.locator('input[type="password"]').nth(1).fill('Test@123456');
 
   await page.getByLabel('Virtual Key *').fill('sk-test-e2e-key');
-  await page.getByLabel('デフォルトモデル *').fill('claude-opus-4-5');
-
-  // 作成ボタン
-  await page.getByRole('button', { name: '作成' }).click();
+  await page.getByLabel('デフォルトモデル *').fill('claude-3-haiku-20240307');
 
   // ユーザー一覧にリダイレクトされる
   await expect(page).toHaveURL(/\/users(?:\/)?$/);
@@ -103,7 +100,7 @@ test('T-03: 管理者がデフォルトCLI・モデルを変更できる', async
   // デフォルトモデル変更
   const modelInput = page.getByLabel('デフォルトモデル');
   await modelInput.clear();
-  await modelInput.fill('openai/gpt-4o');
+  await modelInput.fill('openai/gpt-4o-mini');
 
   await page.getByRole('button', { name: '保存' }).click();
   await expect(page.locator('text=/保存|更新|成功/').first()).toBeVisible({ timeout: 5000 });
@@ -158,7 +155,7 @@ test('T-22: 同一メールアドレスでユーザーを登録できない', as
   await page.locator('input[type="password"]').nth(0).fill('Test@123456');
   await page.locator('input[type="password"]').nth(1).fill('Test@123456');
   await page.getByLabel('Virtual Key *').fill('sk-test');
-  await page.getByLabel('デフォルトモデル *').fill('claude-opus-4-5');
+  await page.getByLabel('デフォルトモデル *').fill('claude-3-haiku-20240307');
 
   await page.getByRole('button', { name: '作成' }).click();
 

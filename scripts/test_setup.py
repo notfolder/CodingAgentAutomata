@@ -81,7 +81,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User Claude",
         "default_cli": "claude",
-        "default_model": "claude-opus-4-5",
+        "default_model": "claude-3-haiku-20240307",
     },
     {
         "username": "testuser-opencode",
@@ -89,7 +89,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User OpenCode",
         "default_cli": "opencode",
-        "default_model": "openai/gpt-4o",
+        "default_model": "openai/gpt-4o-mini",
     },
 ]
 
@@ -454,7 +454,7 @@ def setup_virtual_keys() -> dict[str, str]:
         try:
             resp = _litellm_api("POST", "/key/generate", base_url, master_key, json={
                 "key_alias": user["username"],
-                "models": ["claude-opus-4-5", "openai/gpt-4o"],
+                "models": ["claude-3-haiku-20240307", "openai/gpt-4o-mini"],
             })
             if resp.status_code == 200:
                 vk = resp.json().get("key", "")
