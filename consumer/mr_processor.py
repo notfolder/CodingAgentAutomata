@@ -311,10 +311,10 @@ class MRProcessor:
                 raise ValueError(f"CLI アダプタ '{cli_id_used}' が見つかりません。")
 
             mcp_config: str = self._build_mcp_config(user)
+            # prompt はファイル経由で渡すため env_info には含めない
             env_info: dict = {
                 "llm_api_key": virtual_key,
                 "llm_base_url": self._settings.litellm_proxy_url,
-                "prompt": prompt,
                 "model": model_used,
                 "mcp_config": mcp_config,
             }
@@ -356,6 +356,19 @@ class MRProcessor:
                     f"git checkout 失敗（exit={checkout_exit}）: {checkout_out}"
                 )
             logger.info("MRProcessor: git clone + checkout 完了 branch=%s", branch_name)
+
+            # ==========================================
+            # ステップ 5.5: プロンプトをコンテナ内ファイルに書き込み
+            # ==========================================
+            # コマンドライン引数の長さ制限を回避するため、プロンプトを
+            # コンテナ内の /tmp/prompt.txt にファイルとして書き込む。
+            # start_command_template は cat /tmp/prompt.txt でこのファイルを読み取る。
+            self._cli_container_manager.write_file(
+                container_id, "/tmp/prompt.txt", prompt
+            )
+            logger.debug(
+                "MRProcessor: プロンプトファイルを書き込みました size=%d", len(prompt)
+            )
 
             # ==========================================
             # ステップ 6: MR に処理開始コメント投稿

@@ -294,10 +294,10 @@ class IssueToMRConverter:
             mcp_config: str = self._build_mcp_config(user)
 
             # 環境変数辞書を構築
+            # prompt はファイル経由で渡すため env_info には含めない
             env_info: dict = {
                 "llm_api_key": virtual_key,
                 "llm_base_url": self._settings.litellm_proxy_url,
-                "prompt": prompt,
                 "model": user.default_model,
                 "mcp_config": mcp_config,
             }
@@ -322,6 +322,19 @@ class IssueToMRConverter:
             )
             logger.info(
                 "IssueToMRConverter: コンテナを起動しました container_id=%s", container_id
+            )
+
+            # ==========================================
+            # ステップ 5.5: プロンプトをコンテナ内ファイルに書き込み
+            # ==========================================
+            # コマンドライン引数の長さ制限を回避するため、プロンプトを
+            # コンテナ内の /tmp/prompt.txt にファイルとして書き込む。
+            # start_command_template は cat /tmp/prompt.txt でこのファイルを読み取る。
+            self._cli_container_manager.write_file(
+                container_id, "/tmp/prompt.txt", prompt
+            )
+            logger.debug(
+                "IssueToMRConverter: プロンプトファイルを書き込みました size=%d", len(prompt)
             )
 
             # ==========================================

@@ -146,12 +146,12 @@ class CLIAdapterResolver:
         """
         start_command_template に変数を展開して起動コマンドを構築する。
 
-        {prompt}, {model}, {mcp_config} 変数を展開する。
+        {model}, {mcp_config} 変数を展開する。
+        プロンプトはファイル経由で渡すため {prompt} 変数は使用しない。
 
         Args:
             adapter: CLI アダプタ設定オブジェクト
             info: 渡す情報辞書
-                - prompt: CLI に渡すプロンプトテキスト
                 - model: 使用する LLM モデル名
                 - mcp_config: MCP 設定 JSON 文字列
 
@@ -162,25 +162,9 @@ class CLIAdapterResolver:
 
         command: str = adapter.start_command_template
 
-        # {prompt}, {model}, {mcp_config} を展開
-        prompt: str = info.get("prompt", "")
+        # {model}, {mcp_config} を展開
         model: str = info.get("model", "")
         mcp_config: str = info.get("mcp_config", "")
-
-        # shlex.split でクォートが壊れないようにプロンプトをエスケープする。
-        # テンプレート内で {prompt} がダブルクォートで囲まれている場合（例: "{prompt}"）、
-        # プロンプト内のシェル特殊文字をエスケープする。
-        # - バックスラッシュ・ダブルクォート・バックティック（`）・ドル記号（$）を対象とする。
-        # バックティックは /bin/sh でコマンド置換として解釈されるため必須。
-        # ドル記号は変数展開 ${...} / $(...)  として解釈されるため必須。
-        prompt_escaped = (
-            prompt
-            .replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("`", "\\`")
-            .replace("$", "\\$")
-        )
-        command = command.replace("{prompt}", prompt_escaped)
 
         # mcp_config が空（"{}" や "" など）の場合は --mcp-config 引数ごと削除する
         # 空の MCP 設定を渡すと Claude CLI が "Invalid MCP configuration" エラーを出力して

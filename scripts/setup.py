@@ -121,8 +121,11 @@ BUILTIN_ADAPTERS = [
     {
         "cli_id": "claude",
         "container_image": "coding-agent-cli-exec-claude:latest",
+        # プロンプトはコンテナ内の /tmp/prompt.txt にファイルとして書き込み、
+        # cat コマンドで stdin 経由で渡すことでコマンドライン引数の長さ制限を回避する。
+        # claude -p に引数を渡さない場合、stdin をプロンプトとして読み取る。
         "start_command_template": (
-            "claude -p \"{prompt}\" --dangerously-skip-permissions "
+            "cat /tmp/prompt.txt | claude -p --dangerously-skip-permissions "
             "--model {model} --mcp-config '{mcp_config}'"
         ),
         "env_mappings": json.dumps({
@@ -135,12 +138,11 @@ BUILTIN_ADAPTERS = [
     {
         "cli_id": "opencode",
         "container_image": "coding-agent-cli-exec-opencode:latest",
-        # プロンプトは環境変数 OPENCODE_PROMPT 経由で渡すことで、
-        # 改行・ダブルクォートを含む文字列でも shlex.split が壊れないようにする。
-        "start_command_template": "sh -c 'opencode run \"$OPENCODE_PROMPT\" --model {model}'",
+        # プロンプトはコンテナ内の /tmp/prompt.txt にファイルとして書き込み、
+        # cat コマンドで stdin 経由で渡す。opencode run - は stdin をプロンプトとして読み取る。
+        "start_command_template": "cat /tmp/prompt.txt | opencode run - --model {model}",
         "env_mappings": json.dumps({
             "llm_api_key": "OPENAI_API_KEY",
-            "prompt": "OPENCODE_PROMPT",
         }),
         "config_content_env": "OPENCODE_CONFIG_CONTENT",
         "is_builtin": True,

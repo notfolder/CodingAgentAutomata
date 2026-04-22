@@ -182,7 +182,7 @@ PostgreSQLを使用する。ユーザー情報・Virtual Key（暗号化）・CL
 |---|---|---|---|
 | cli_id | VARCHAR(255) | PRIMARY KEY, NOT NULL | CLIエージェント識別子（例: claude, opencode） |
 | container_image | VARCHAR(512) | NOT NULL | cli-execコンテナイメージ名・タグ |
-| start_command_template | TEXT | NOT NULL | 起動コマンドテンプレート（{prompt}/{model}/{mcp_config}変数含む） |
+| start_command_template | TEXT | NOT NULL | 起動コマンドテンプレート（{model}/{mcp_config}変数含む。プロンプトはコンテナ内ファイル経由で渡す） |
 | env_mappings | JSONB | NOT NULL | 情報名→環境変数名マッピング |
 | config_content_env | VARCHAR(255) | NULL | 設定内容をJSON環境変数で渡す場合の環境変数名 |
 | is_builtin | BOOLEAN | NOT NULL, DEFAULT FALSE | 組み込みアダプタフラグ（TRUEは削除不可） |
@@ -578,6 +578,7 @@ sequenceDiagram
     C->>GL: Issueに処理中ラベル付与
     C->>GL: F-3プロンプトテンプレートをDB取得・変数展開
     C->>CE: cli-execコンテナ起動（Virtual Key環境変数セット）
+    C->>CE: プロンプトをコンテナ内 /tmp/prompt.txt に書き込み
     CE->>LLM: CLIエージェント実行（ブランチ名・MRタイトル生成）
     CE-->>C: CLIの標準出力（最終行のJSON）
     C->>C: 最終行をJSONパース（branch_name, mr_title取得）
@@ -615,6 +616,7 @@ sequenceDiagram
     C->>C: MR descriptionからCLI/モデル上書き指定確認
     C->>C: プロンプトテンプレート展開
     C->>CE: cli-execコンテナ起動（PATを埋め込んだURLでgit clone・MRブランチチェックアウト）
+    C->>CE: プロンプトをコンテナ内 /tmp/prompt.txt に書き込み
     C->>GL: MRに処理開始コメント投稿
     par CLI実行
         CE-->>C: CLIの標準出力バッファを逐次読み取り
@@ -721,11 +723,11 @@ ConsumerはCLI実行中に別スレッドまたは非同期タスクで `PROGRES
 
 #### CLIContainerManager
 - **属性**: `_docker_client` (Docker SDK)
-- **メソッド**: `start_container(container_name, image, env_vars, command)` → コンテナ起動・ID返却、`exec_command(container_id, command)` → コンテナ内コマンド実行、`stop_container(container_id)` → コンテナ停止・破棄、`get_stdout_stream(container_id)` → 標準出力ストリーム取得、`kill_process(container_id, pid)` → CLIプロセスのみ強制終了
+- **メソッド**: `start_container(container_name, image, env_vars, command)` → コンテナ起動・ID返却、`exec_command(container_id, command)` → コンテナ内コマンド実行、`stop_container(container_id)` → コンテナ停止・破棄、`get_stdout_stream(container_id)` → 標準出力ストリーム取得、`kill_process(container_id, pid)` → CLIプロセスのみ強制終了、`write_file(container_id, file_path, content)` → Docker put_archive でコンテナ内ファイルを書き込み
 
 #### CLIAdapterResolver
 - **属性**: なし（`CLIAdapterRepository` を依存注入）
-- **メソッド**: `resolve(cli_id)` → CLIアダプタ設定取得、`build_env_vars(adapter, info)` → 環境変数辞書構築、`build_start_command(adapter, info)` → 起動コマンド文字列構築
+- **メソッド**: `resolve(cli_id)` → CLIアダプタ設定取得、`build_env_vars(adapter, info)` → 環境変数辞書構築、`build_start_command(adapter, info)` → `{model}`・`{mcp_config}` を展開した起動コマンド文字列構築（プロンプトはファイル経由のため `{prompt}` 展開は行わない）
 
 #### ProgressManager
 - **属性**: `_gitlab_client`, `_project_id`, `_mr_iid`, `_note_id`, `_buffer` (最大PROGRESS_REPORT_BUFFER_MAX_LINES行), `_interval_sec`, `_summary_lines`
@@ -796,6 +798,7 @@ classDiagram
         +stop_container()
         +get_stdout_stream()
         +kill_process()
+        +write_file()
     }
 
     class CLIAdapterResolver {
