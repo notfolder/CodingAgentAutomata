@@ -175,6 +175,27 @@ if [ "${ADMIN_LOGIN_OK}" = "false" ]; then
     exit 1
 fi
 
+# --real モード時は LiteLLM Proxy（litellm_real）の起動を待機する
+if [ "${REAL_LLM}" = "true" ]; then
+    echo ""
+    echo "[ステップ 4.5] LiteLLM Proxy（litellm_real）の起動を待機します..."
+    LITELLM_READY=false
+    for i in $(seq 1 30); do
+        HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4001/health 2>/dev/null || true)
+        # 200（認証不要）または 401（認証必要だがサーバーは起動中）のいずれもOK
+        if [ "${HTTP_STATUS}" = "200" ] || [ "${HTTP_STATUS}" = "401" ]; then
+            LITELLM_READY=true
+            echo "  LiteLLM Proxy 起動確認済み (HTTP ${HTTP_STATUS})"
+            break
+        fi
+        echo "  LiteLLM Proxy 起動待ち... (${i}/30, HTTP ${HTTP_STATUS})"
+        sleep 5
+    done
+    if [ "${LITELLM_READY}" = "false" ]; then
+        echo "  警告: LiteLLM Proxy が応答しませんでした。フォールバックモードで続行します。" >&2
+    fi
+fi
+
 # -------------------------------------------------------
 # ステップ 5: test_setup.py（GitLab・テストユーザー設定）
 # -------------------------------------------------------
@@ -197,6 +218,11 @@ export BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
 # （.env の Docker 内部 URL を上書き）
 export LITELLM_PROXY_URL="http://localhost:4001"
 export MOCK_LLM_URL="http://localhost:4000"
+# .env の source が子プロセスに渡らない場合に備え LITELLM_MASTER_KEY を明示的に export する
+if [ -z "${LITELLM_MASTER_KEY:-}" ]; then
+    LITELLM_MASTER_KEY=$(grep '^LITELLM_MASTER_KEY=' "${ENV_FILE}" | cut -d'=' -f2- | tr -d '\r')
+fi
+export LITELLM_MASTER_KEY
 
 "${VENV_DIR}/bin/python3" "${SCRIPT_DIR}/test_setup.py"
 
