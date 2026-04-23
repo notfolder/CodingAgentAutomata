@@ -504,7 +504,10 @@ class IssueToMRConverter:
             final_labels: list[str] = [
                 lbl
                 for lbl in current_labels
-                if lbl != self._settings.gitlab_processing_label
+                if lbl not in (
+                    self._settings.gitlab_processing_label,
+                    self._settings.gitlab_bot_label,
+                )
             ]
             final_labels.append(self._settings.gitlab_done_label)
             self._gitlab_client.update_issue_labels(

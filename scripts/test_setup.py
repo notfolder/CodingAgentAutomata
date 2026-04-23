@@ -78,6 +78,8 @@ BOT_USERNAME = "coding-agent-bot"
 BOT_EMAIL = "coding-agent-bot@example.com"
 BOT_PASSWORD = "Bot@SecurePassword123!"
 BOT_LABEL = "coding agent"
+TEST_GROUP_NAME = "coding-agent-test-group"
+TEST_GROUP_PATH = "coding-agent-test-group"
 TEST_PROJECT_NAME = "coding-agent-test"
 
 TEST_USERS = [
@@ -275,32 +277,75 @@ def setup_gitlab_bot(root_token: str) -> tuple[str, str]:
         return bot_id, ""
 
 
+def setup_test_group(root_token: str) -> str:
+    """テスト用グループを作成または取得する
+
+    Returns:
+        group_id
+    """
+    resp = _gitlab_api("POST", "/groups", root_token, json={
+        "name": TEST_GROUP_NAME,
+        "path": TEST_GROUP_PATH,
+        "visibility": "private",
+    })
+    if resp.status_code == 201:
+        group_id = str(resp.json()["id"])
+        logger.info("テスト用グループ '%s' を作成しました (ID: %s)", TEST_GROUP_PATH, group_id)
+        return group_id
+
+    if resp.status_code in (409, 422):
+        resp2 = _gitlab_api("GET", f"/groups?search={TEST_GROUP_PATH}", root_token)
+        if resp2.status_code == 200:
+            groups = [g for g in resp2.json() if g.get("full_path") == TEST_GROUP_PATH or g.get("path") == TEST_GROUP_PATH]
+            if groups:
+                group_id = str(groups[0]["id"])
+                logger.info("テスト用グループ '%s' は既に存在します (ID: %s)", TEST_GROUP_PATH, group_id)
+                return group_id
+
+    logger.error("テスト用グループ作成失敗 (%d): %s", resp.status_code, resp.text[:200])
+    return ""
+
+
 def setup_test_project(root_token: str, bot_user_id: str) -> str:
-    """テスト用プロジェクトを作成してラベル・メンバーを設定する
+    """テスト用グループ配下にプロジェクトを作成してラベル・メンバーを設定する
 
     Returns:
         project_id
     """
+    group_id = setup_test_group(root_token)
+    if not group_id:
+        return ""
+
     resp = _gitlab_api("POST", "/projects", root_token, json={
         "name": TEST_PROJECT_NAME,
+        "namespace_id": int(group_id),
         "visibility": "private",
         "initialize_with_readme": True,
     })
     if resp.status_code == 201:
         project_id = str(resp.json()["id"])
-        logger.info("テスト用プロジェクト '%s' を作成しました (ID: %s)", TEST_PROJECT_NAME, project_id)
-    elif resp.status_code in (400, 422) and "taken" in resp.text:
-        resp2 = _gitlab_api("GET", f"/projects?search={TEST_PROJECT_NAME}&owned=true", root_token)
-        projects = [p for p in resp2.json() if p["name"] == TEST_PROJECT_NAME]
-        if not projects:
-            # 全プロジェクトから探す
-            resp2 = _gitlab_api("GET", f"/projects?search={TEST_PROJECT_NAME}", root_token)
-            projects = [p for p in resp2.json() if p["name"] == TEST_PROJECT_NAME]
+        logger.info(
+            "テスト用プロジェクト '%s/%s' を作成しました (ID: %s)",
+            TEST_GROUP_PATH,
+            TEST_PROJECT_NAME,
+            project_id,
+        )
+    elif resp.status_code in (400, 409, 422):
+        resp2 = _gitlab_api("GET", f"/groups/{group_id}/projects?search={TEST_PROJECT_NAME}", root_token)
+        if resp2.status_code != 200:
+            logger.error("テスト用プロジェクトの取得に失敗しました (%d)", resp2.status_code)
+            return ""
+        projects = [p for p in resp2.json() if p.get("name") == TEST_PROJECT_NAME]
         if not projects:
             logger.error("テスト用プロジェクトの取得に失敗しました")
             return ""
         project_id = str(projects[0]["id"])
-        logger.info("テスト用プロジェクト '%s' は既に存在します (ID: %s)", TEST_PROJECT_NAME, project_id)
+        logger.info(
+            "テスト用プロジェクト '%s/%s' は既に存在します (ID: %s)",
+            TEST_GROUP_PATH,
+            TEST_PROJECT_NAME,
+            project_id,
+        )
     else:
         logger.error("テスト用プロジェクト作成失敗 (%d): %s", resp.status_code, resp.text[:200])
         return ""
