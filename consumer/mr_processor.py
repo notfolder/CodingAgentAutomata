@@ -246,14 +246,18 @@ class MRProcessor:
             if user is None:
                 error_msg = f"ユーザーがシステムに登録されていません。"
                 self._gitlab_client.create_merge_request_note(
-                    project_id, mr_iid, f"❌ エラー: {error_msg}"
+                    project_id,
+                    mr_iid,
+                    f"❌ エラー: {error_msg}\n\nTask ID: `{task_uuid}`",
                 )
                 self._update_task_status(task_uuid, "failed", error_message=error_msg)
                 return
             if not user.is_active:
                 error_msg = f"ユーザー '{user.username}' は無効化されています。"
                 self._gitlab_client.create_merge_request_note(
-                    project_id, mr_iid, f"❌ エラー: {error_msg}"
+                    project_id,
+                    mr_iid,
+                    f"❌ エラー: {error_msg}\n\nTask ID: `{task_uuid}`",
                 )
                 self._update_task_status(task_uuid, "failed", error_message=error_msg)
                 return
@@ -515,7 +519,9 @@ class MRProcessor:
 
                 timeout_msg = f"CLI 実行がタイムアウトしました（{timeout_sec}秒）。"
                 self._gitlab_client.create_merge_request_note(
-                    project_id, mr_iid, f"⏰ {timeout_msg}"
+                    project_id,
+                    mr_iid,
+                    f"⏰ {timeout_msg}\n\nTask ID: `{task_uuid}`",
                 )
                 raise TimeoutError(timeout_msg)
 
@@ -601,7 +607,11 @@ class MRProcessor:
                 self._gitlab_client.create_merge_request_note(
                     project_id,
                     mr_iid,
-                    f"❌ F-4 処理中にエラーが発生しました。\n\n```\n{error_msg}\n```",
+                    (
+                        "❌ F-4 処理中にエラーが発生しました。\n\n"
+                        f"Task ID: `{task_uuid}`\n\n"
+                        f"```\n{error_msg}\n```"
+                    ),
                 )
                 # 処理中ラベルを削除
                 mr_current: Optional[dict] = self._gitlab_client.get_merge_request(

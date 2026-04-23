@@ -199,7 +199,9 @@ class IssueToMRConverter:
                 error_msg = f"ユーザー '{username}' がシステムに登録されていません。"
                 logger.error("IssueToMRConverter: %s", error_msg)
                 self._gitlab_client.create_issue_note(
-                    project_id, issue_iid, f"❌ エラー: {error_msg}"
+                    project_id,
+                    issue_iid,
+                    f"❌ エラー: {error_msg}\n\nTask ID: `{task_uuid}`",
                 )
                 self._update_task_status(task_uuid, "failed", error_message=error_msg)
                 return
@@ -208,7 +210,9 @@ class IssueToMRConverter:
                 error_msg = f"ユーザー '{username}' は無効化されています。"
                 logger.error("IssueToMRConverter: %s", error_msg)
                 self._gitlab_client.create_issue_note(
-                    project_id, issue_iid, f"❌ エラー: {error_msg}"
+                    project_id,
+                    issue_iid,
+                    f"❌ エラー: {error_msg}\n\nTask ID: `{task_uuid}`",
                 )
                 self._update_task_status(task_uuid, "failed", error_message=error_msg)
                 return
@@ -290,7 +294,9 @@ class IssueToMRConverter:
                 error_msg = f"CLI アダプタ '{user.default_cli}' が見つかりません。"
                 logger.error("IssueToMRConverter: %s", error_msg)
                 self._gitlab_client.create_issue_note(
-                    project_id, issue_iid, f"❌ エラー: {error_msg}"
+                    project_id,
+                    issue_iid,
+                    f"❌ エラー: {error_msg}\n\nTask ID: `{task_uuid}`",
                 )
                 self._update_task_status(task_uuid, "failed", error_message=error_msg)
                 return
@@ -535,7 +541,11 @@ class IssueToMRConverter:
                 self._gitlab_client.create_issue_note(
                     project_id=project_id,
                     iid=issue_iid,
-                    body=f"❌ F-3 処理中にエラーが発生しました。\n\n```\n{error_msg}\n```",
+                    body=(
+                        "❌ F-3 処理中にエラーが発生しました。\n\n"
+                        f"Task ID: `{task_uuid}`\n\n"
+                        f"```\n{error_msg}\n```"
+                    ),
                 )
                 # 処理中ラベルを削除
                 issue_data: Optional[dict] = self._gitlab_client.get_issue(
