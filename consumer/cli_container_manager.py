@@ -19,6 +19,8 @@ import docker.models.containers
 # ロガーを設定
 logger = logging.getLogger(__name__)
 
+DOCKER_CLIENT_TIMEOUT_SEC = int(os.environ.get("DOCKER_CLIENT_TIMEOUT_SEC", "120"))
+
 
 class CLIContainerManager:
     """
@@ -36,7 +38,10 @@ class CLIContainerManager:
         Docker daemon に接続できない場合は例外を送出する。
         """
         # docker.sock 経由で Docker デーモンに接続
-        self._client: docker.DockerClient = docker.from_env()
+        # 初回起動の重いコンテナでも start() がタイムアウトしにくいよう待機時間を延長
+        self._client: docker.DockerClient = docker.from_env(
+            timeout=DOCKER_CLIENT_TIMEOUT_SEC
+        )
         logger.debug("CLIContainerManager: Docker クライアントを初期化しました")
 
         # Consumer コンテナ自身が接続しているネットワークを取得（CLI コンテナも同一ネットワークで起動するため）
