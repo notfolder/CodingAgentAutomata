@@ -264,10 +264,11 @@ export LITELLM_MASTER_KEY
 echo ""
 echo "[ステップ 5.5] GitLab テストユーザーのパスワードを固定化します..."
 for gitlab_user in testuser-claude testuser-opencode; do
-    if docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "user = User.find_by_username('${gitlab_user}'); if user; user.password='${TEST_USER_PASSWORD}'; user.password_confirmation='${TEST_USER_PASSWORD}'; user.save!(validate: false); puts 'updated'; else; puts 'not_found'; end" >/dev/null; then
+    if docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "user = User.find_by_username('${gitlab_user}'); if user.nil?; STDERR.puts('not_found'); exit 11; end; user.password='${TEST_USER_PASSWORD}'; user.password_confirmation='${TEST_USER_PASSWORD}'; user.password_automatically_set=false if user.respond_to?(:password_automatically_set=); user.save!(validate: false); unless user.valid_password?('${TEST_USER_PASSWORD}'); STDERR.puts('verify_failed'); exit 12; end; puts 'updated'" >/dev/null; then
         echo "  ${gitlab_user} のパスワードを設定しました"
     else
-        echo "  警告: ${gitlab_user} のパスワード設定に失敗しました" >&2
+        echo "エラー: ${gitlab_user} のパスワード設定に失敗しました" >&2
+        exit 1
     fi
 done
 

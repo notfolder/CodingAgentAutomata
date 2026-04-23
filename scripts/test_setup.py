@@ -380,11 +380,12 @@ def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
     user_pats: dict[str, str] = {}
 
     for user in TEST_USERS:
-        # ユーザー作成（E2E ログイン確認のため固定パスワードを設定）
+        # ユーザー作成（GitLab API のパスワードポリシー回避のためランダム初期パスワードで作成）
+        # 固定パスワードは test_setup.sh 側で gitlab-rails runner により上書きする
         resp = _gitlab_api("POST", "/users", root_token, json={
             "username": user["username"],
             "email": user["email"],
-            "password": user["password"],
+            "force_random_password": True,
             "name": user["name"],
             "skip_confirmation": True,
         })
@@ -403,17 +404,6 @@ def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
             logger.warning("GitLab テストユーザー '%s' 作成失敗 (%d): %s",
                            user["username"], resp.status_code, resp.text[:200])
             continue
-
-        # 既存ユーザーでも毎回固定パスワードに揃える
-        update_resp = _gitlab_api("PUT", f"/users/{user_id}", root_token, json={
-            "password": user["password"],
-            "skip_reconfirmation": True,
-        })
-        if update_resp.status_code not in (200, 201):
-            logger.warning(
-                "GitLab テストユーザー '%s' のパスワード更新失敗 (%d): %s",
-                user["username"], update_resp.status_code, update_resp.text[:200],
-            )
 
         # ユーザー用 PAT 発行（admin API 経由なのでパスワード不要）
         pat_resp = _gitlab_api("POST", f"/users/{user_id}/personal_access_tokens", root_token, json={
