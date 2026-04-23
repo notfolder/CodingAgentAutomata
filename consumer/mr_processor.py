@@ -264,10 +264,15 @@ class MRProcessor:
             # ステップ 2: MR に処理中ラベル付与
             # ==========================================
             current_labels: list[str] = mr.get("labels", [])
+            base_labels: list[str] = [
+                lbl
+                for lbl in current_labels
+                if lbl != self._settings.gitlab_bot_label
+            ]
             self._gitlab_client.update_merge_request_labels(
                 project_id,
                 mr_iid,
-                list(set(current_labels + [self._settings.gitlab_processing_label])),
+                list(set(base_labels + [self._settings.gitlab_processing_label])),
             )
 
             # ==========================================

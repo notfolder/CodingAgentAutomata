@@ -233,9 +233,14 @@ class IssueToMRConverter:
                 return
 
             current_labels: list[str] = issue.get("labels", [])
-            # 処理中ラベルを追加
+            # 処理中ラベルを追加し、トリガー用ラベルは同時に外す
+            base_labels: list[str] = [
+                lbl
+                for lbl in current_labels
+                if lbl != self._settings.gitlab_bot_label
+            ]
             updated_labels: list[str] = list(
-                set(current_labels + [self._settings.gitlab_processing_label])
+                set(base_labels + [self._settings.gitlab_processing_label])
             )
             self._gitlab_client.update_issue_labels(
                 project_id, issue_iid, updated_labels
