@@ -65,6 +65,7 @@ WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "http://localhost:8080/webhook")
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123456")
+TEST_USER_PASSWORD = os.environ.get("TEST_USER_PASSWORD", "Test@123456")
 WAIT_GITLAB = os.environ.get("WAIT_GITLAB", "true").lower() != "false"
 
 # デフォルトモデル設定（.env の DEFAULT_CLAUDE_MODEL / DEFAULT_OPENAI_MODEL_LITELLM で変更可能）
@@ -83,7 +84,7 @@ TEST_USERS = [
     {
         "username": "testuser-claude",
         "email": "testuser-claude@example.com",
-        "password": "Test@123456",
+        "password": TEST_USER_PASSWORD,
         "name": "Test User Claude",
         "default_cli": "claude",
         "default_model": DEFAULT_CLAUDE_MODEL,
@@ -91,7 +92,7 @@ TEST_USERS = [
     {
         "username": "testuser-opencode",
         "email": "testuser-opencode@example.com",
-        "password": "Test@123456",
+        "password": TEST_USER_PASSWORD,
         "name": "Test User OpenCode",
         "default_cli": "opencode",
         "default_model": DEFAULT_OPENAI_MODEL_LITELLM,
@@ -379,12 +380,11 @@ def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
     user_pats: dict[str, str] = {}
 
     for user in TEST_USERS:
-        # ユーザー作成（force_random_password で GitLab にパスワードを自動生成させる）
-        # パスワードは PAT 認証のみを使用するため不要
+        # ユーザー作成（E2E ログイン確認のため固定パスワードを設定）
         resp = _gitlab_api("POST", "/users", root_token, json={
             "username": user["username"],
             "email": user["email"],
-            "force_random_password": True,
+            "password": user["password"],
             "name": user["name"],
             "skip_confirmation": True,
         })
@@ -403,6 +403,17 @@ def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
             logger.warning("GitLab テストユーザー '%s' 作成失敗 (%d): %s",
                            user["username"], resp.status_code, resp.text[:200])
             continue
+
+        # 既存ユーザーでも毎回固定パスワードに揃える
+        update_resp = _gitlab_api("PUT", f"/users/{user_id}", root_token, json={
+            "password": user["password"],
+            "skip_reconfirmation": True,
+        })
+        if update_resp.status_code not in (200, 201):
+            logger.warning(
+                "GitLab テストユーザー '%s' のパスワード更新失敗 (%d): %s",
+                user["username"], update_resp.status_code, update_resp.text[:200],
+            )
 
         # ユーザー用 PAT 発行（admin API 経由なのでパスワード不要）
         pat_resp = _gitlab_api("POST", f"/users/{user_id}/personal_access_tokens", root_token, json={
@@ -554,7 +565,7 @@ BACKEND_URL={BACKEND_URL}
 BASE_URL=http://localhost:80
 ADMIN_USERNAME={ADMIN_USERNAME}
 ADMIN_PASSWORD={ADMIN_PASSWORD}
-TEST_USER_PASSWORD=Test@123456{litellm_proxy_line}
+TEST_USER_PASSWORD={TEST_USER_PASSWORD}{litellm_proxy_line}
 PROGRESS_REPORT_INTERVAL_SEC=5
 """
     with open(env_path, "w") as f:

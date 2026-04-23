@@ -67,6 +67,9 @@ set -o allexport
 source <(grep -v '^\s*#' "${ENV_FILE}" | grep -v '^\s*$')
 set +o allexport
 
+# GitLab コンテナ名（.env 未設定時は docker-compose の既定名を使用）
+GITLAB_CONTAINER="${GITLAB_CONTAINER:-codingagentautomata-gitlab-1}"
+
 echo "テスト環境セットアップを開始します..."
 
 # -------------------------------------------------------
@@ -90,6 +93,33 @@ fi
 
 echo "[ステップ 2] サービスを起動します（profile: ${COMPOSE_PROFILE}）..."
 docker compose --profile "${COMPOSE_PROFILE}" up -d --build
+
+# -------------------------------------------------------
+# ステップ 2.5: GitLab root パスワードを変更する
+# -------------------------------------------------------
+echo ""
+echo "[ステップ 2.5] GitLab root パスワードを変更します..."
+# 本システムの管理者パスワードと同じ固定値を使用
+GITLAB_ROOT_PASSWORD="Admin@123456"
+
+# GitLab の共通パスワード判定に該当する固定値を許容するため、テスト環境では validation を無効化して保存する
+RUBY_SCRIPT="user = User.find_by_username('root'); user.password = '${GITLAB_ROOT_PASSWORD}'; user.password_confirmation = '${GITLAB_ROOT_PASSWORD}'; user.save!(validate: false); puts 'Root password changed successfully'"
+
+# GitLab コンテナの起動を待機しながらパスワード変更を試みる
+PASSWORD_CHANGED=false
+for i in $(seq 1 30); do
+    if docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "${RUBY_SCRIPT}"; then
+        PASSWORD_CHANGED=true
+        echo "  GitLab root パスワードを変更しました: ${GITLAB_ROOT_PASSWORD}"
+        break
+    fi
+    echo "  GitLab root パスワード変更待機中... (${i}/30)"
+    sleep 5
+done
+
+if [ "${PASSWORD_CHANGED}" = "false" ]; then
+    echo "  警告: GitLab root パスワードの変更に失敗しました"
+fi
 
 # -------------------------------------------------------
 # ステップ 3: Backend の起動と Alembic マイグレーション
@@ -218,6 +248,8 @@ export BACKEND_URL="${BACKEND_URL:-http://localhost:8000}"
 # （.env の Docker 内部 URL を上書き）
 export LITELLM_PROXY_URL="http://localhost:4001"
 export MOCK_LLM_URL="http://localhost:4000"
+# GitLab テストユーザー（testuser-claude / testuser-opencode）の固定パスワード
+export TEST_USER_PASSWORD="${TEST_USER_PASSWORD:-Test@123456}"
 # .env の source が子プロセスに渡らない場合に備え LITELLM_MASTER_KEY を明示的に export する
 if [ -z "${LITELLM_MASTER_KEY:-}" ]; then
     LITELLM_MASTER_KEY=$(grep '^LITELLM_MASTER_KEY=' "${ENV_FILE}" | cut -d'=' -f2- | tr -d '\r')
@@ -225,6 +257,19 @@ fi
 export LITELLM_MASTER_KEY
 
 "${VENV_DIR}/bin/python3" "${SCRIPT_DIR}/test_setup.py"
+
+# -------------------------------------------------------
+# ステップ 5.5: GitLab テストユーザーのパスワードを固定化
+# -------------------------------------------------------
+echo ""
+echo "[ステップ 5.5] GitLab テストユーザーのパスワードを固定化します..."
+for gitlab_user in testuser-claude testuser-opencode; do
+    if docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "user = User.find_by_username('${gitlab_user}'); if user; user.password='${TEST_USER_PASSWORD}'; user.password_confirmation='${TEST_USER_PASSWORD}'; user.save!(validate: false); puts 'updated'; else; puts 'not_found'; end" >/dev/null; then
+        echo "  ${gitlab_user} のパスワードを設定しました"
+    else
+        echo "  警告: ${gitlab_user} のパスワード設定に失敗しました" >&2
+    fi
+done
 
 # -------------------------------------------------------
 # ステップ 6: .env.test の内容を反映するためサービスを force-recreate
