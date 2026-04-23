@@ -181,6 +181,10 @@ services:
       # F-4 (MR処理) のレスポンスに遅延を入れる
       # monitor_assignees (5秒間隔) が bot のアサイン解除を検知できるようにする
       MOCK_LLM_RESPONSE_DELAY_SEC: "20"
+      # デフォルトモデル（.env の DEFAULT_*_MODEL で変更可能）
+      DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
+      DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
+      DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
     networks:
       - codingagent_net
 
@@ -220,6 +224,10 @@ services:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
       # PostgreSQL への接続（litellm 専用 DB を使用）
       DATABASE_URL: postgresql://litellm:litellm@postgresql_litellm:5432/litellm_db
+      # デフォルトモデル（.env の DEFAULT_*_MODEL で変更可能）
+      DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
+      DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
+      DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
     ports:
       - "4001:4000"
     volumes:
@@ -252,6 +260,11 @@ services:
       DATABASE_URL: postgresql://litellm:litellm@postgresql_litellm:5432/litellm_db
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # デフォルトモデル（.env の DEFAULT_*_MODEL で変更可能）
+      DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
+      DEFAULT_CLAUDE_MODEL_LITELLM: ${DEFAULT_CLAUDE_MODEL_LITELLM:-anthropic/claude-haiku-4-5-20251001}
+      DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
+      DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
     ports:
       - "4001:4000"
     volumes:
@@ -289,6 +302,10 @@ services:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-guest}
       RABBITMQ_MGMT_URL: http://rabbitmq:15672
+      # デフォルトモデル（.env の DEFAULT_*_MODEL で変更可能）
+      DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
+      DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
+      DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
     volumes:
       - ./e2e:/e2e
     networks:
@@ -319,6 +336,10 @@ services:
       GITLAB_API_URL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
       BASE_URL: http://frontend:80
+      # デフォルトモデル（.env の DEFAULT_*_MODEL で変更可能）
+      DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
+      DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
+      DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
     volumes:
       - ./e2e:/e2e
     networks:

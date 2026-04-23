@@ -58,7 +58,7 @@ test('T-01: 管理者が新規ユーザーを登録できる', async ({ page }) 
   await page.locator('input[type="password"]').nth(1).fill('Test@123456');
 
   await page.getByLabel('Virtual Key *').fill('sk-test-e2e-key');
-  await page.getByLabel('デフォルトモデル *').fill('claude-3-haiku-20240307');
+  await page.getByLabel('デフォルトモデル *').fill(process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001');
 
   // ユーザー一覧にリダイレクトされる
   await expect(page).toHaveURL(/\/users(?:\/)?$/);
@@ -155,7 +155,7 @@ test('T-22: 同一メールアドレスでユーザーを登録できない', as
   await page.locator('input[type="password"]').nth(0).fill('Test@123456');
   await page.locator('input[type="password"]').nth(1).fill('Test@123456');
   await page.getByLabel('Virtual Key *').fill('sk-test');
-  await page.getByLabel('デフォルトモデル *').fill('claude-3-haiku-20240307');
+  await page.getByLabel('デフォルトモデル *').fill(process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001');
 
   await page.getByRole('button', { name: '作成' }).click();
 

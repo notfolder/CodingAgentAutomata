@@ -67,6 +67,11 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123456")
 WAIT_GITLAB = os.environ.get("WAIT_GITLAB", "true").lower() != "false"
 
+# デフォルトモデル設定（.env の DEFAULT_CLAUDE_MODEL / DEFAULT_OPENAI_MODEL_LITELLM で変更可能）
+DEFAULT_CLAUDE_MODEL = os.environ.get("DEFAULT_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+DEFAULT_OPENAI_MODEL = os.environ.get("DEFAULT_OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_OPENAI_MODEL_LITELLM = os.environ.get("DEFAULT_OPENAI_MODEL_LITELLM", "openai/gpt-4o-mini")
+
 # テスト用アカウント定義
 BOT_USERNAME = "coding-agent-bot"
 BOT_EMAIL = "coding-agent-bot@example.com"
@@ -81,7 +86,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User Claude",
         "default_cli": "claude",
-        "default_model": "claude-3-haiku-20240307",
+        "default_model": DEFAULT_CLAUDE_MODEL,
     },
     {
         "username": "testuser-opencode",
@@ -89,7 +94,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User OpenCode",
         "default_cli": "opencode",
-        "default_model": "openai/gpt-4o-mini",
+        "default_model": DEFAULT_OPENAI_MODEL_LITELLM,
     },
 ]
 
@@ -454,7 +459,7 @@ def setup_virtual_keys() -> dict[str, str]:
         try:
             resp = _litellm_api("POST", "/key/generate", base_url, master_key, json={
                 "key_alias": user["username"],
-                "models": ["claude-3-haiku-20240307", "openai/gpt-4o-mini"],
+                "models": [DEFAULT_CLAUDE_MODEL, DEFAULT_OPENAI_MODEL_LITELLM, DEFAULT_OPENAI_MODEL],
             })
             if resp.status_code == 200:
                 vk = resp.json().get("key", "")

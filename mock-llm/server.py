@@ -17,6 +17,11 @@ logger = logging.getLogger(__name__)
 PORT = int(os.environ.get("PORT", "4000"))
 RESPONSE_DELAY_SEC = float(os.environ.get("MOCK_LLM_RESPONSE_DELAY_SEC", "0"))
 
+# デフォルトモデル名（.env の DEFAULT_CLAUDE_MODEL / DEFAULT_OPENAI_MODEL で変更可能）
+CLAUDE_MODEL = os.environ.get("DEFAULT_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+OPENAI_MODEL = os.environ.get("DEFAULT_OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL_LITELLM = os.environ.get("DEFAULT_OPENAI_MODEL_LITELLM", "openai/gpt-4o-mini")
+
 # 発行済みキーの一覧（メモリ内管理）
 issued_keys: dict[str, dict] = {}
 
@@ -104,9 +109,9 @@ class MockLLMHandler(BaseHTTPRequestHandler):
         self._send_json(200, {
             "object": "list",
             "data": [
-                {"id": "gpt-4o-mini", "object": "model", "created": 1706037612, "owned_by": "openai"},
-                {"id": "claude-3-haiku-20240307", "object": "model", "created": 1706037612, "owned_by": "anthropic"},
-                {"id": "openai/gpt-4o-mini", "object": "model", "created": 1706037612, "owned_by": "openai"},
+                {"id": OPENAI_MODEL, "object": "model", "created": 1706037612, "owned_by": "openai"},
+                {"id": CLAUDE_MODEL, "object": "model", "created": 1706037612, "owned_by": "anthropic"},
+                {"id": OPENAI_MODEL_LITELLM, "object": "model", "created": 1706037612, "owned_by": "openai"},
             ],
         })
 
@@ -130,7 +135,7 @@ class MockLLMHandler(BaseHTTPRequestHandler):
 
     def _handle_key_info(self) -> None:
         """GET /key/info — キー情報を返す"""
-        self._send_json(200, {"key": "mock", "models": ["gpt-4o-mini", "claude-3-haiku-20240307"]})
+        self._send_json(200, {"key": "mock", "models": [OPENAI_MODEL, CLAUDE_MODEL]})
 
     def _handle_health(self) -> None:
         """GET /health — ヘルスチェック"""

@@ -46,6 +46,10 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@123456")
 
+# デフォルトモデル設定（.env の DEFAULT_CLAUDE_MODEL / DEFAULT_OPENAI_MODEL_LITELLM で変更可能）
+DEFAULT_CLAUDE_MODEL = os.environ.get("DEFAULT_CLAUDE_MODEL", "claude-haiku-4-5-20251001")
+DEFAULT_OPENAI_MODEL_LITELLM = os.environ.get("DEFAULT_OPENAI_MODEL_LITELLM", "openai/gpt-4o-mini")
+
 BOT_USERNAME = "coding-agent-bot"
 BOT_EMAIL = "coding-agent-bot@example.com"
 BOT_PASSWORD = "Bot@SecurePassword123!"
@@ -59,7 +63,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User OpenCode",
         "default_cli": "opencode",
-        "default_model": "openai/gpt-4o-mini",
+        "default_model": DEFAULT_OPENAI_MODEL_LITELLM,
     },
     {
         "username": "testuser-claude",
@@ -67,7 +71,7 @@ TEST_USERS = [
         "password": "Test@123456",
         "name": "Test User Claude",
         "default_cli": "claude",
-        "default_model": "claude-3-haiku-20240307",
+        "default_model": DEFAULT_CLAUDE_MODEL,
     },
 ]
 

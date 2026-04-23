@@ -142,7 +142,7 @@ for i in $(seq 1 3); do
             --password Admin@123456 \
             --virtual-key sk-placeholder \
             --default-cli claude \
-            --default-model claude-3-haiku-20240307"; then
+            --default-model ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}"; then
         SETUP_SUCCESS=true
         break
     fi

@@ -273,6 +273,31 @@ async function waitForTaskStatus(
   }, timeoutMs);
 }
 
+/**
+ * pending/running 状態のタスクがなくなるまで待機するヘルパー（キュー掃け待ち）
+ *
+ * 前のテストが起動した CLI タスク（F-3/F-4）がコンシューマーのキューに
+ * バックログとして残っている場合、後続テストのタスクが TASK_TIMEOUT_MS 以内に
+ * 処理されずに失敗することがある。
+ * このヘルパーを使って全 pending/running タスクが完了してからテストを開始することで
+ * キューバックログ起因の失敗を防ぐ。
+ *
+ * @param token Backend の JWT トークン
+ * @param timeoutMs 待機タイムアウト（デフォルト: TASK_TIMEOUT_MS）
+ */
+async function waitForQueueDrain(
+  token: string,
+  timeoutMs = TASK_TIMEOUT_MS
+): Promise<void> {
+  await waitUntil(async () => {
+    // プロジェクト/IID フィルタなしで全タスクを取得
+    const tasks = await getBackendTasks(token);
+    return !tasks.some(
+      (t: unknown) => ['pending', 'running'].includes((t as { status: string }).status)
+    );
+  }, timeoutMs);
+}
+
 // -----------------------------------------------------------------------
 // テスト前提条件チェック
 // -----------------------------------------------------------------------
@@ -508,7 +533,7 @@ test('T-13: 無効化ユーザーのIssueは処理されない', async () => {
       password: 'Test@123456',
       virtual_key: 'sk-mock-disabled-key',
       default_cli: 'claude',
-      default_model: 'claude-3-haiku-20240307',
+      default_model: process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001',
       role: 'user',
     }),
   });
@@ -706,6 +731,13 @@ test('T-31: testuser-opencodeのIssueをopencode CLIでMR変換できる', async
   const issueSuffix = Date.now();
   const issueTitle = `[E2E T-31] opencode MR変換テスト ${issueSuffix}`;
 
+  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+
+  // 前のテスト（T-28/T-30）の CLI タスク（F-4）がコンシューマーキューに残っている場合、
+  // T-31 の F-3 タスクが TASK_TIMEOUT_MS 以内に処理されず失敗する。
+  // キューが空になってから Issue を投入することで競合を防ぐ。
+  await waitForQueueDrain(adminToken, TASK_TIMEOUT_MS);
+
   // testuser-opencode として Issue を作成（バックエンドの users テーブルに opencode ユーザーとして登録済み）
   const issue = await createIssue(
     projectId, GITLAB_USER_TOKEN_OPENCODE, issueTitle,
@@ -716,7 +748,6 @@ test('T-31: testuser-opencodeのIssueをopencode CLIでMR変換できる', async
   await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
 
   // Backend タスクが completed になるまで待つ（既存 MR の誤検知を避けるため waitForMR の代わりに使用）
-  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
   const completed = await waitForTaskStatus(
     adminToken, projectId, String(issue.iid), 'completed', TASK_TIMEOUT_MS
   );
