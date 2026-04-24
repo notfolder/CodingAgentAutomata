@@ -213,7 +213,7 @@ flowchart TD
 | コンポーネント | 起動方式 | 主な設定受け取り |
 | --- | --- | --- |
 | backend | コンテナ起動時に自動起動 | `DATABASE_URL`、`JWT_SECRET_KEY`、`JWT_EXPIRE_MINUTES` |
-| producer | `python producer.py` | `RABBITMQ_URL`、`GITLAB_URL`、`GITLAB_WEBHOOK_SECRET`、`POLLING_INTERVAL_SECONDS` |
+| producer | `python producer.py` | `RABBITMQ_URL`、`GITLAB_API_URL`、`GITLAB_WEBHOOK_SECRET`、`POLLING_INTERVAL_SECONDS` |
 | consumer | `python consumer.py` | `RABBITMQ_URL`、`DATABASE_URL`、`CLI_EXEC_TIMEOUT_SEC`、`PROGRESS_REPORT_INTERVAL_SEC`、`PROGRESS_REPORT_SUMMARY_LINES` |
 | setup系スクリプト | 手動実行 | `.env` のAPIキー、GitLab接続情報、LiteLLM接続情報 |
 
