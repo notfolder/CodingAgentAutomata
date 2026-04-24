@@ -170,7 +170,8 @@ flowchart TD
 | GitLab | REST API | Issue/MR操作・ブランチ・コミット・コメント・ラベル管理 |
 | GitLab | Webhook（受信） | Issue/MR更新イベントのリアルタイム受信 |
 | LiteLLM Proxy | HTTP（OpenAI互換API・Anthropic互換API） | Issue→MR変換時のCLI起動およびMR処理時のCLI起動。Virtual Keyで認証。Claude Codeは`ANTHROPIC_BASE_URL`経由でAnthropic互換エンドポイント（`/v1/messages`）に接続する |
-| RabbitMQ | AMQP | Producer/Consumer間の非同期タスクキュー |
+
+RabbitMQ は外部連携先ではなく、本システム内部のメッセージキュー構成要素として扱う。
 
 ### 3.5 Web管理画面 一覧・仕様
 
@@ -312,47 +313,12 @@ flowchart TD
 
 本システムはdocker-composeで構成し、Producer・Consumer（複数台並列起動可能）・Webhookサーバー・PostgreSQL・RabbitMQを同一docker-compose環境で動作させる。ConsumerはタスクをRabbitMQから受け取るたびに、CLI専用のcli-execコンテナを起動してCLIに処理させ、完了後にコンテナを破棄する。ConsumerコンテナにCLIのインストールは不要で、代わりにDockerデーモンへのアクセス権が必要。すべての設定は環境変数で受け取る。
 
-### コアコンポーネント共通（必須）
-
-| 環境変数名 | 説明 |
-| --- | --- |
-| GITLAB_PAT | GitLab bot用Personal Access Token |
-| GITLAB_URL | GitLab APIのベースURL |
-| GITLAB_BOT_NAME | botアカウントのGitLabユーザー名 |
-| GITLAB_BOT_LABEL | 処理対象ラベル名（デフォルト: `coding agent`） |
-| GITLAB_PROCESSING_LABEL | 処理中状態ラベル名（デフォルト: `coding agent processing`） |
-| GITLAB_DONE_LABEL | 完了状態ラベル名（デフォルト: `coding agent done`） |
-| LITELLM_PROXY_URL | LiteLLM ProxyのベースURL |
-| DATABASE_URL | PostgreSQL接続文字列 |
-| RABBITMQ_URL | RabbitMQ接続文字列 |
-| ENCRYPTION_KEY | Virtual Key暗号化キー（AES-256-GCM） |
-| JWT_SECRET_KEY | Web管理画面JWT署名キー |
-
-### Webhookサーバー（追加）
-
-| 環境変数名 | 説明 |
-| --- | --- |
-| GITLAB_WEBHOOK_SECRET | X-Gitlab-Token ヘッダーの直接比較に使用する検証トークン |
-| WEBHOOK_PORT | Webhookリッスンポート（デフォルト: 8080） |
-
-### ポーリング設定（オプション）
-
-| 環境変数名 | 説明 |
-| --- | --- |
-| POLLING_INTERVAL_SECONDS | ポーリング間隔（秒）。デフォルト: 30 |
-
-### 進捗報告設定（オプション）
-
-| 環境変数名 | 説明 |
-| --- | --- |
-| PROGRESS_REPORT_INTERVAL_SEC | 進捗コメントを更新する間隔（秒）。デフォルト: 60 |
-| PROGRESS_REPORT_SUMMARY_LINES | `<summary>` に表示するCLI出力の末尾行数。デフォルト: 20 |
-
-### タイムアウト設定（オプション）
-
-| 環境変数名 | 説明 |
-| --- | --- |
-| CLI_EXEC_TIMEOUT_SEC | CLI処理タイムアウト上限（秒）。デフォルト: 10800（3時間） |
+| コンポーネント | 起動方式 | 主な設定受け取り |
+| --- | --- | --- |
+| backend | コンテナ起動時に自動起動 | `DATABASE_URL`、`JWT_SECRET_KEY`、`JWT_EXPIRE_MINUTES` |
+| producer | `python producer.py` | `RABBITMQ_URL`、`GITLAB_URL`、`GITLAB_WEBHOOK_SECRET`、`POLLING_INTERVAL_SECONDS` |
+| consumer | `python consumer.py` | `RABBITMQ_URL`、`DATABASE_URL`、`CLI_EXEC_TIMEOUT_SEC`、`PROGRESS_REPORT_INTERVAL_SEC`、`PROGRESS_REPORT_SUMMARY_LINES` |
+| setup系スクリプト | 手動実行 | `.env` のAPIキー、GitLab接続情報、LiteLLM接続情報 |
 
 #### cli-execコンテナ詳細仕様
 
@@ -529,13 +495,13 @@ flowchart TD
 
 各コンポーネントの死活監視のみを行う。
 
-| 監視対象 | 監視方法 |
-| --- | --- |
-| Producer | HTTPヘルスチェックエンドポイント（`/health`）への定期リクエストで監視する |
-| Consumer（全インスタンス） | プロセスの起動・停止を監視する |
-| Webhookサーバー | HTTPヘルスチェックエンドポイント（`/health`）への定期リクエストで監視する |
-| PostgreSQL | TCP接続確認で監視する |
-| RabbitMQ | TCP接続確認で監視する |
+| 監視対象 | 監視方法 | 備考 |
+| --- | --- | --- |
+| backend | /health | FastAPI 健康確認 |
+| producer | /health | WebhookServer 健康確認 |
+| 各コンテナ | restart: always | compose の自動再起動に依存 |
+| postgresql | healthcheck | pg_isready を使用 |
+| rabbitmq | コンテナ死活監視 | 管理UIの疎通確認は別運用 |
 
 いずれかのコンポーネントがダウンした場合はコンテナオーケストレーションの自動再起動機能により復旧する。
 
