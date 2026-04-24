@@ -1,0 +1,29 @@
+# LiteLLM Proxy 設定（テスト環境用）
+# テスト環境: mock_llm コンテナへ転送（実 API キー不要）
+# 本番環境（test-real プロファイル）: 実際の OpenAI / Anthropic API に転送
+
+# Master Key による認証を有効化（PostgreSQL DB で Virtual Key を管理）
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+model_list:
+  # OpenAI GPT-4o mini（opencode テスト用: プレフィックスあり）→ mock_llm に転送
+  - model_name: openai/gpt-4o-mini
+    litellm_params:
+      model: openai/mock-gpt-4o-mini
+      api_key: sk-mock-dummy
+      api_base: http://mock_llm:4000/v1
+
+  # OpenAI GPT-4o mini（プレフィックスなし）→ mock_llm に転送
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/mock-gpt-4o-mini
+      api_key: sk-mock-dummy
+      api_base: http://mock_llm:4000/v1
+
+  # Anthropic Claude Haiku 4.5（claude テスト用）→ mock_llm に転送
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: openai/mock-claude
+      api_key: sk-mock-dummy
+      api_base: http://mock_llm:4000/v1

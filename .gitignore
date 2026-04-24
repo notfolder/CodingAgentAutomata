@@ -68,6 +68,7 @@ lib64/
 
 # Python 仮想環境
 .venv/
+.venv-test-setup/
 venv/
 env/
 ENV/
@@ -107,3 +108,8 @@ ENV/
 *.sqlite
 *.sqlite3
 *.db
+
+# Playwright
+e2e/playwright-report/
+e2e/test-results/
+.env.test

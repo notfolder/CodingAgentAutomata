@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Web管理画面API・認証・ユーザーCRUD・タスク履歴・システム設定管理コンポーネント"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-jose[cryptography]>=3.3",
+    "bcrypt>=4.1",
+    "cryptography>=42.0",
+    "alembic>=1.13",
+    "email-validator>=2.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

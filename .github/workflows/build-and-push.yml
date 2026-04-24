@@ -1,0 +1,69 @@
+name: Build and Push Docker Images to GHCR
+
+on:
+  push:
+    branches:
+      - main
+      - copilot/**
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/codingagentautomata
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        include:
+          - service: backend
+            dockerfile: backend/Dockerfile
+            context: .
+            image_suffix: backend
+          - service: frontend
+            dockerfile: frontend/Dockerfile
+            context: .
+            image_suffix: frontend
+          - service: producer
+            dockerfile: producer/Dockerfile
+            context: .
+            image_suffix: producer
+          - service: consumer
+            dockerfile: consumer/Dockerfile
+            context: .
+            image_suffix: consumer
+          - service: mock_llm
+            dockerfile: mock-llm/Dockerfile
+            context: mock-llm/
+            image_suffix: mock-llm
+
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: GHCR へログイン
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Buildx のセットアップ
+        uses: docker/setup-buildx-action@v3
+
+      - name: イメージのビルドとプッシュ（${{ matrix.service }}）
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.image_suffix }}:latest
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.image_suffix }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
