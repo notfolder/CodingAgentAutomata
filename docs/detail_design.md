@@ -332,6 +332,17 @@ graph TD
 | 409 | email 重複、cli_id 重複、タスク重複挿入 |
 | 422 | リクエストボディやクエリのバリデーション不正 |
 
+### 4.8 CUI引数・環境変数仕様
+
+| コンポーネント | 起動方式 | 主な設定受け取り |
+| --- | --- | --- |
+| backend | コンテナ起動時に自動起動 | `DATABASE_URL`、`JWT_SECRET_KEY`、`JWT_EXPIRE_MINUTES` |
+| producer | `python producer.py` | `RABBITMQ_URL`、`GITLAB_URL`、`GITLAB_WEBHOOK_SECRET`、`POLLING_INTERVAL_SECONDS` |
+| consumer | `python consumer.py` | `RABBITMQ_URL`、`DATABASE_URL`、`CLI_EXEC_TIMEOUT_SEC`、`PROGRESS_REPORT_INTERVAL_SEC`、`PROGRESS_REPORT_SUMMARY_LINES` |
+| setup系スクリプト | 手動実行 | `.env` のAPIキー、GitLab接続情報、LiteLLM接続情報 |
+
+CLI実行コンテナへは、CLIアダプタ設定の `env_mappings` と `config_content_env` に基づき必要な環境変数を注入する。プロンプト本文は環境変数ではなく `/tmp/prompt.txt` を介して受け渡す。
+
 ## 5. 内部設計
 
 ### 5.1 Webhook受信フロー
@@ -691,3 +702,19 @@ CodingAgentAutomata/
 | rabbitmq | コンテナ死活監視 | 管理UIの疎通確認は別運用 |
 
 専用のアラート基盤や永続監視基盤は、このリポジトリ内には実装されていない。
+
+## 11. E2Eシナリオ対応表
+
+### 11.1 現在実装に対応するシナリオ
+
+| シナリオID | 対応テスト | 検証内容 |
+| --- | --- | --- |
+| TS-01 | e2e/tests/auth.spec.ts | ログイン、未認証時遷移、権限制御によるリダイレクト |
+| TS-02 | e2e/tests/users.spec.ts | ユーザー作成・編集・削除、重複時エラー |
+| TS-03 | e2e/tests/tasks.spec.ts | タスク一覧表示、フィルタ、画面遷移 |
+| TS-04 | e2e/tests/gitlab_integration.spec.ts | Webhook/ポーリング検出、MR処理、進捗更新、重複防止 |
+
+### 11.2 運用上の補足
+
+- Playwright 実行は docker compose の `test` または `test-real` プロファイルを使用する
+- 現在の自動検証は E2E が中心であり、Python 単体テスト・結合テストは不要とする
