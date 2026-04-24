@@ -345,6 +345,39 @@ CLI実行コンテナへは、CLIアダプタ設定の `env_mappings` と `confi
 
 ## 5. 内部設計
 
+### 5.0 全機能ユーザー利用フロー
+
+システム全体の利用の流れを俯瞰するため、管理者によるユーザー登録から Issue 処理、MR 処理完了までの主要フローを以下に示す。
+
+```mermaid
+flowchart TD
+    A[管理者がユーザーを新規登録する] --> B[GitLabユーザー名・Virtual Key・デフォルトCLI・モデルを入力して作成]
+    B --> C[GitLab開発者がIssueを作成する]
+    C --> D[IssueにbotをアサインしてGitLabラベルを付与する]
+    D --> E{Webhook受信 または ポーリング検出}
+    E --> F[IssueからMR生成処理を開始する]
+    F --> G[IssueのauthorのVirtual Keyを取得する]
+    G --> G2[Issueに処理中ラベルを付与する]
+    G2 --> H[cli-execコンテナを起動してCLIを実行し、ブランチ名・MRタイトルを生成する]
+    H --> I[GitLab APIで作業ブランチとDraft MRを作成する]
+    I --> I2[IssueのauthorをMRの最初のレビュアーに設定する]
+    I2 --> I3[IssueのコメントをMRへコピーする]
+    I3 --> J[IssueにMR作成完了コメントを投稿する]
+    J --> J2[Issueはクローズしない]
+    J2 --> K[次のWebhookまたはポーリングでMRを検出する]
+    K --> L[MR処理を開始する]
+    L --> M[最初のレビュアーのVirtual Keyを取得する]
+    M --> M2[MRに処理中ラベルを付与する]
+    M2 --> N[MR descriptionからCLI種別・モデルを決定する]
+    N --> O[cli-execコンテナを起動し、MRブランチをcloneしてcheckoutする]
+    O --> P[Virtual Keyを設定してCLIを起動する]
+    P --> P2[MRに処理開始コメントを投稿する]
+    P2 --> Q[CLIがdescriptionの指示に従いコード変更・テストを実行する]
+    Q --> Q2[CLIの標準出力を定期的にMRへ進捗コメントとして投稿する]
+    Q2 --> R[変更をコミット・プッシュする]
+    R --> S[MRの処理中ラベルを削除し完了コメントを投稿しdoneラベルを付与する]
+```
+
 ### 5.1 Webhook受信フロー
 
 ```mermaid
@@ -431,12 +464,25 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> active
-    active --> inactive
-    inactive --> active
+    [*] --> active : 管理者がユーザー作成
+    active --> inactive : 管理者が無効化
+    inactive --> active : 管理者が有効化
+    active --> [*] : 管理者がユーザー削除
+    inactive --> [*] : 管理者がユーザー削除
 ```
 
 cli_adapters と system_settings は業務ワークフロー上の状態遷移を持たない。
+
+#### cli_adapters のライフサイクルルール
+
+cli_adapters にはステータス管理はないが、以下のライフサイクルルールが適用される。
+
+| 操作 | 内容 |
+| --- | --- |
+| 初期データ投入 | システム初期化時に組み込みアダプタ（`claude`・`opencode`）が自動登録される |
+| 管理者による追加 | システム設定画面にて新規CLIアダプタを登録できる |
+| 管理者による編集 | システム設定画面にて既存アダプタの各属性を変更できる |
+| 管理者による削除 | `is_builtin = false` のアダプタのみ削除可能。削除時にそのCLIエージェントIDを `default_cli` に持つユーザーが存在する場合はエラーを返し削除を拒否する |
 
 ## 6. クラス・モジュール設計
 
