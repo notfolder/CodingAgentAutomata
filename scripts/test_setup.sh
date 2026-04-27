@@ -64,7 +64,8 @@ fi
 echo ".env を読み込みます: ${ENV_FILE}"
 set -o allexport
 # shellcheck disable=SC1090
-source <(grep -v '^\s*#' "${ENV_FILE}" | grep -v '^\s*$')
+# スペースを含む値を正しく扱うため KEY="VALUE" 形式に変換してから読み込む
+source <(grep -v '^\s*#' "${ENV_FILE}" | grep -v '^\s*$' | sed 's/^\([^=]*\)=\(.*\)$/\1="\2"/')
 set +o allexport
 
 # GitLab コンテナ名（.env 未設定時は docker-compose の既定名を使用）
