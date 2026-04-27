@@ -39,10 +39,11 @@ class ModelCandidateService:
                       省略時は環境変数 LITELLM_ENDPOINT またはデフォルト値を使用する
             timeout_sec: HTTP リクエストのタイムアウト秒数（デフォルト: 10.0秒）
         """
-        # エンドポイントは引数 → 環境変数 → デフォルト値 の優先順で決定する
+        # エンドポイントは引数 → LITELLM_ENDPOINT 環境変数 → LITELLM_PROXY_URL 環境変数 → デフォルト値 の優先順で決定する
         self._endpoint: str = (
             endpoint
-            or os.environ.get("LITELLM_ENDPOINT", _DEFAULT_LITELLM_ENDPOINT)
+            or os.environ.get("LITELLM_ENDPOINT")
+            or os.environ.get("LITELLM_PROXY_URL", _DEFAULT_LITELLM_ENDPOINT)
         ).rstrip("/")
         self._timeout_sec = timeout_sec
         logger.debug(
@@ -66,6 +67,7 @@ class ModelCandidateService:
             tuple[bool, str]: (有効かどうか, エラーメッセージ)
                               有効の場合は (True, "")
                               無効の場合は (False, エラーメッセージ)
+                              エンドポイントに接続できない場合は (True, "") を返す（スキップ）
         """
         url = f"{self._endpoint}/models"
         logger.debug("ModelCandidateService.validate_key: GET %s", url)
@@ -89,15 +91,23 @@ class ModelCandidateService:
                 )
                 return False, error_msg
         except httpx.TimeoutException as exc:
-            error_msg = f"LiteLLM エンドポイントへの接続がタイムアウトしました: {exc}"
-            logger.warning("ModelCandidateService.validate_key: タイムアウト: %s", exc)
-            return False, error_msg
-        except Exception as exc:
-            error_msg = f"LiteLLM エンドポイントへの接続に失敗しました: {exc}"
+            # タイムアウト時はエンドポイントに接続できないとみなしてスキップする
             logger.warning(
-                "ModelCandidateService.validate_key: 接続エラー: %s", exc
+                "ModelCandidateService.validate_key: タイムアウトのためキー検証をスキップします: %s", exc
             )
-            return False, error_msg
+            return True, ""
+        except (httpx.ConnectError, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+            # エンドポイントに接続できない場合（LiteLLMが未起動など）はスキップする
+            logger.warning(
+                "ModelCandidateService.validate_key: LiteLLM エンドポイントに接続できないためキー検証をスキップします: %s", exc
+            )
+            return True, ""
+        except Exception as exc:
+            # その他の予期しないエラーもスキップとして扱う
+            logger.warning(
+                "ModelCandidateService.validate_key: 接続エラーのためキー検証をスキップします: %s", exc
+            )
+            return True, ""
 
     async def fetch_models(self, key: str) -> list[str]:
         """

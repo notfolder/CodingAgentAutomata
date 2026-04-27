@@ -306,6 +306,12 @@ services:
       DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
       DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
       DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
+      # 管理者・テストユーザー認証情報
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123456}
+      TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
+      # Webhook エンドポイント（グループWebhookテスト用）
+      WEBHOOK_URL: http://producer:8080/webhook
+      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-test-webhook-secret}
     volumes:
       - ./e2e:/e2e
     networks:
@@ -313,6 +319,7 @@ services:
     depends_on:
       - frontend
       - mock_llm
+      - producer
 
   # -------------------------------------------------------
   # Playwright E2Eテスト実行コンテナ（実LLMモード）
@@ -340,6 +347,12 @@ services:
       DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
       DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
       DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
+      # 管理者・テストユーザー認証情報
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123456}
+      TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
+      # Webhook エンドポイント（グループWebhookテスト用）
+      WEBHOOK_URL: http://producer:8080/webhook
+      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-test-webhook-secret}
     volumes:
       - ./e2e:/e2e
     networks:
@@ -347,6 +360,7 @@ services:
     depends_on:
       - frontend
       - litellm_real
+      - producer
 
   # -------------------------------------------------------
   # Claude CLI exec イメージビルド専用サービス
