@@ -83,6 +83,90 @@ class MRProcessor:
                 task.model = model
             session.commit()
 
+    def _report_tty_wait_failure(
+        self,
+        task_uuid: str,
+        container_id: Optional[str],
+        project_id: int,
+        source_iid: int,
+        task_type: str,
+        detection_log: str = "",
+    ) -> None:
+        """
+        TTY 入力待機を検知した際に CLI を強制終了して失敗報告を行う。
+
+        T-04 要件: TTY 待機検知時の CLI 強制終了・失敗コメント投稿・ログ記録。
+
+        Args:
+            task_uuid: タスク UUID
+            container_id: CLI コンテナ ID（None の場合はコンテナ操作をスキップ）
+            project_id: GitLab プロジェクト ID
+            source_iid: Issue または MR の IID
+            task_type: タスク種別（"issue" または "merge_request"）
+            detection_log: TTY 検知ログ文字列
+        """
+        # CLI コンテナを強制停止する
+        if container_id:
+            try:
+                self._cli_container_manager.stop_container(container_id)
+                logger.info(
+                    "MRProcessor._report_tty_wait_failure: "
+                    "CLI コンテナを強制停止しました container_id=%s",
+                    container_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "MRProcessor._report_tty_wait_failure: "
+                    "CLI コンテナ停止中にエラーが発生しました（無視）: %s",
+                    exc,
+                )
+
+        # GitLab にエラーコメントを投稿する
+        error_msg = "TTY入力待機を検知したため強制終了しました"
+        comment_body = (
+            "⚠️ TTY 入力待機を検知したため CLI を強制終了しました。\n\n"
+            f"Task ID: `{task_uuid}`\n\n"
+            f"Issue/MR: #{source_iid}"
+        )
+        try:
+            if task_type == "merge_request":
+                self._gitlab_client.create_merge_request_note(
+                    project_id, source_iid, comment_body
+                )
+            else:
+                # Issue の場合は Issue ノートとして投稿する
+                self._gitlab_client.create_issue_note(
+                    project_id, source_iid, comment_body
+                )
+        except Exception as exc:
+            logger.warning(
+                "MRProcessor._report_tty_wait_failure: "
+                "GitLab コメント投稿に失敗しました（無視）: %s",
+                exc,
+            )
+
+        # タスクの error_message と cli_log を更新する
+        detection_log_entry = (
+            f"[TTY待機検知] TTY入力待機を検知したため強制終了しました\n{detection_log}"
+        )
+        with self._db_session_factory() as session:
+            from shared.models.db import Task as _Task
+
+            task: Optional[_Task] = (
+                session.query(_Task).filter(_Task.task_uuid == task_uuid).first()
+            )
+            if task:
+                task.error_message = error_msg
+                # 既存のcli_logに検知ログを追記する
+                existing_log = task.cli_log or ""
+                task.cli_log = existing_log + "\n" + detection_log_entry if existing_log else detection_log_entry
+                session.commit()
+                logger.info(
+                    "MRProcessor._report_tty_wait_failure: "
+                    "タスクのエラー情報を更新しました task_uuid=%s",
+                    task_uuid,
+                )
+
     def _build_mcp_config(self, user: User) -> str:
         mcp_config: dict = {}
         if user.system_mcp_enabled:
@@ -343,6 +427,13 @@ class MRProcessor:
                 command="sleep infinity",
             )
             logger.info("MRProcessor: コンテナ起動 container_id=%s", container_id)
+
+            # コンテナ起動直後に git config を自動設定する
+            # user.name と user.email が未設定だと git commit が失敗するため
+            self._cli_container_manager.configure_git(
+                container_id,
+                self._settings.gitlab_bot_name,
+            )
 
             # PAT を埋め込んだ URL で git clone
             clone_url: str = self._build_clone_url(

@@ -235,6 +235,21 @@ export async function deleteUser(username: string): Promise<void> {
   await apiClient.delete(`/users/${username}`)
 }
 
+/**
+ * 対象ユーザーの Virtual Key から利用可能なモデル候補一覧を取得する
+ * @param username ユーザー名
+ * @returns モデル候補の文字列配列。取得失敗時は空配列
+ */
+export async function getModelCandidates(username: string): Promise<string[]> {
+  try {
+    const response = await apiClient.get<string[]>(`/users/${username}/model-candidates`)
+    return response.data
+  } catch {
+    // 取得失敗時は空配列を返す（サジェスト非表示で継続）
+    return []
+  }
+}
+
 // --- タスク管理 ---
 
 /**

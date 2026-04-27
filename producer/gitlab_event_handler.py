@@ -107,17 +107,39 @@ class GitLabEventHandler:
         self._db_session_factory = db_session_factory
         self._settings = settings
         self._dup_check = DuplicateCheckService(db_session_factory)
+        # 処理済み Idempotency-Key をメモリ内で管理するセット（重複受信抑止）
+        self._processed_keys: set[str] = set()
 
-    def handle_event(self, payload: dict) -> None:
+    def handle_event(self, payload: dict, idempotency_key: Optional[str] = None) -> None:
         """
         Webhook イベントまたはポーリングイベントからタスクを RabbitMQ に投入する。
 
         Webhook ペイロードの object_kind フィールドに基づいて処理を振り分ける。
         object_kind が "issue" または "merge_request" 以外の場合はスキップする。
 
+        idempotency_key が指定されている場合は重複受信チェックを行い、
+        既に処理済みのキーであればスキップして早期リターンする。
+
         Args:
             payload: GitLab Webhook ペイロード辞書
+            idempotency_key: 重複受信抑止用のべき等キー（X-Idempotency-Key ヘッダー値）
         """
+        # Idempotency-Key による重複受信チェック
+        if idempotency_key is not None:
+            if idempotency_key in self._processed_keys:
+                # すでに処理済みのキーのためスキップする
+                logger.debug(
+                    "GitLabEventHandler: Idempotency-Key '%s' は既に処理済みのためスキップします",
+                    idempotency_key,
+                )
+                return
+            # 新規のキーをセットに追加して処理を継続する
+            self._processed_keys.add(idempotency_key)
+            logger.debug(
+                "GitLabEventHandler: Idempotency-Key '%s' を登録して処理を継続します",
+                idempotency_key,
+            )
+
         object_kind: str = payload.get("object_kind", "")
 
         if object_kind == "issue":

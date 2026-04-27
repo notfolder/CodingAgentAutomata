@@ -341,6 +341,65 @@ class CLIContainerManager:
             len(content_bytes),
         )
 
+    def configure_git(self, container_id: str, bot_name: str) -> bool:
+        """
+        コンテナ内で git のグローバル設定を行う。
+
+        git commit 時に user.name と user.email が必要なため、
+        コンテナ起動直後に自動設定する。
+        設定失敗時はエラーをログに記録するが処理は継続する（True を返す）。
+
+        Args:
+            container_id: 対象コンテナの ID
+            bot_name: git config に設定するボット名
+
+        Returns:
+            bool: 設定処理を試みた場合は True（失敗してもTrueを返す）
+        """
+        logger.info(
+            "CLIContainerManager.configure_git: container_id=%s, bot_name=%s",
+            container_id,
+            bot_name,
+        )
+        try:
+            # user.name を設定
+            name_exit, name_out = self.exec_command(
+                container_id,
+                f'git config --global user.name "{bot_name}"',
+            )
+            if name_exit != 0:
+                logger.warning(
+                    "CLIContainerManager.configure_git: user.name 設定失敗 "
+                    "exit=%d, output=%s（処理継続）",
+                    name_exit,
+                    name_out,
+                )
+
+            # user.email を設定
+            email_exit, email_out = self.exec_command(
+                container_id,
+                f'git config --global user.email "{bot_name}@localhost"',
+            )
+            if email_exit != 0:
+                logger.warning(
+                    "CLIContainerManager.configure_git: user.email 設定失敗 "
+                    "exit=%d, output=%s（処理継続）",
+                    email_exit,
+                    email_out,
+                )
+
+            logger.debug(
+                "CLIContainerManager.configure_git: git config 設定完了 container_id=%s",
+                container_id,
+            )
+        except Exception as exc:
+            # エラーが発生しても処理は継続する
+            logger.error(
+                "CLIContainerManager.configure_git: git config 設定中にエラーが発生しました（処理継続）: %s",
+                exc,
+            )
+        return True
+
     def get_container_pid(
         self,
         container_id: str,
