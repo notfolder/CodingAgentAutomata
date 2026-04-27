@@ -91,23 +91,23 @@ class ModelCandidateService:
                 )
                 return False, error_msg
         except httpx.TimeoutException as exc:
-            # タイムアウト時はエンドポイントに接続できないとみなしてスキップする
+            # タイムアウト時はエンドポイントに接続できないとみなしてスキップする（WARNINGのみ）
             logger.warning(
                 "ModelCandidateService.validate_key: タイムアウトのためキー検証をスキップします: %s", exc
             )
             return True, ""
         except (httpx.ConnectError, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
-            # エンドポイントに接続できない場合（LiteLLMが未起動など）はスキップする
+            # エンドポイントに接続できない場合（LiteLLMが未起動など）はスキップする（WARNINGのみ）
             logger.warning(
-                "ModelCandidateService.validate_key: LiteLLM エンドポイントに接続できないためキー検証をスキップします: %s", exc
+                "ModelCandidateService.validate_key: LiteLLM エンドポイントに接続できないためキー検証をスキップします: %s",
+                exc,
             )
             return True, ""
-        except Exception as exc:
-            # その他の予期しないエラーもスキップとして扱う
-            logger.warning(
-                "ModelCandidateService.validate_key: 接続エラーのためキー検証をスキップします: %s", exc
-            )
-            return True, ""
+        except httpx.HTTPStatusError as exc:
+            # httpx の HTTP ステータスエラー（raise_for_status が呼ばれた場合）は検証失敗として扱う
+            error_msg = f"LiteLLM エンドポイントが HTTP エラーを返しました: {exc}"
+            logger.warning("ModelCandidateService.validate_key: HTTPステータスエラー: %s", exc)
+            return False, error_msg
 
     async def fetch_models(self, key: str) -> list[str]:
         """
