@@ -1,4 +1,18 @@
 <script setup lang="ts">
+import { ref, onMounted, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import {
+  getUser,
+  updateUser,
+  updateUserSelf,
+  getAdapters,
+  getModelCandidates,
+  type UserResponse,
+  type CLIAdapterResponse,
+} from '../api/client'
+import { useAuthStore } from '../stores/auth'
+import axios from 'axios'
+
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
@@ -13,6 +27,9 @@ const isSelfEdit = computed(() => auth.currentUsername === username)
 
 // CLIアダプタ一覧
 const adapters = ref<CLIAdapterResponse[]>([])
+
+// モデル候補一覧（サジェスト表示用）
+const modelCandidates = ref<string[]>([])
 
 // フォーム入力値
 const email = ref('')
@@ -89,6 +106,19 @@ async function fetchAdapters(): Promise<void> {
 }
 
 /**
+ * モデル候補一覧を取得する（サジェスト表示用）
+ * 取得失敗時は空配列のまま継続する
+ */
+async function fetchModelCandidates(): Promise<void> {
+  try {
+    modelCandidates.value = await getModelCandidates(username)
+  } catch {
+    // モデル候補取得失敗は致命的エラーではない（手入力で継続可能）
+    modelCandidates.value = []
+  }
+}
+
+/**
  * 保存処理
  * admin は PUT /users/{username} を、一般ユーザーは PUT /users/{username}/me を呼ぶ
  */
@@ -148,7 +178,13 @@ async function handleSave(): Promise<void> {
     if (axios.isAxiosError(error) && error.response?.status === 403) {
       errorMessage.value = '更新権限がありません。'
     } else if (axios.isAxiosError(error) && error.response?.status === 400) {
-      errorMessage.value = '入力内容に誤りがあります。現在のパスワードを確認してください。'
+      // バックエンドからのエラーメッセージを表示する（LLMキー検証失敗など）
+      const detail = error.response?.data?.detail
+      if (detail) {
+        errorMessage.value = `入力内容に誤りがあります: ${detail}`
+      } else {
+        errorMessage.value = '入力内容に誤りがあります。現在のパスワードを確認してください。'
+      }
     } else {
       errorMessage.value = '保存に失敗しました。'
     }
@@ -167,7 +203,11 @@ function clearF4Template(): void {
 
 // コンポーネントマウント時にデータ取得
 onMounted(async () => {
-  await Promise.all([fetchUser(), isAdminEdit.value ? fetchAdapters() : Promise.resolve()])
+  await Promise.all([
+    fetchUser(),
+    isAdminEdit.value ? fetchAdapters() : Promise.resolve(),
+    fetchModelCandidates(),
+  ])
 })
 </script>
 
@@ -288,13 +328,16 @@ onMounted(async () => {
 
             <!-- デフォルトモデル -->
             <v-col cols="12" md="6">
-              <v-text-field
+              <!-- モデル候補がある場合はサジェスト付きv-combobox、ない場合はテキスト入力 -->
+              <v-combobox
                 v-model="defaultModel"
                 label="デフォルトモデル"
                 variant="outlined"
                 prepend-inner-icon="mdi-brain"
                 hint="例: claude-3-5-sonnet-20241022"
                 persistent-hint
+                :items="modelCandidates"
+                :no-data-text="modelCandidates.length === 0 ? 'モデル候補を取得できませんでした（手入力で入力してください）' : ''"
               />
             </v-col>
 
