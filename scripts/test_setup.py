@@ -293,7 +293,8 @@ def setup_test_group(root_token: str) -> str:
         logger.info("テスト用グループ '%s' を作成しました (ID: %s)", TEST_GROUP_PATH, group_id)
         return group_id
 
-    if resp.status_code in (409, 422):
+    if resp.status_code in (400, 409, 422):
+        # 400 は GitLab CE で「パスが既に使用されている」場合にも返される
         resp2 = _gitlab_api("GET", f"/groups?search={TEST_GROUP_PATH}", root_token)
         if resp2.status_code == 200:
             groups = [g for g in resp2.json() if g.get("full_path") == TEST_GROUP_PATH or g.get("path") == TEST_GROUP_PATH]
