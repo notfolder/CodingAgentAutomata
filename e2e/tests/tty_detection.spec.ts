@@ -105,7 +105,7 @@ test('TS-5.3: BTF不足でTTY検知無効時もタスク処理が継続する', 
   // BTF不足でのfailタスクが存在する場合の確認
   // （実際のeBPF環境がないためこのメッセージは出ないはず）
   const btfFailedTasks = tasks.filter(
-    (t) => t.error_message?.includes('BTF') || t.error_message?.includes('btf'),
+    (t) => t.error_message?.toLowerCase().includes('btf'),
   );
   // BTF不足が直接失敗理由にならない（WARNING で継続される）ことを確認する
   expect(btfFailedTasks.length).toBe(0);

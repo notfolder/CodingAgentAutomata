@@ -77,8 +77,15 @@ class EBPFEnvironmentChecker:
                 )
                 return False
 
-            # 16進数を整数に変換してビットチェック
-            cap_eff: int = int(cap_eff_hex, 16)
+            # 16進数を整数に変換してビットチェック（不正な形式の場合は安全に処理）
+            try:
+                cap_eff: int = int(cap_eff_hex, 16)
+            except ValueError:
+                logger.warning(
+                    "EBPFEnvironmentChecker.check_caps: CapEff 値の解析に失敗しました value='%s'",
+                    cap_eff_hex,
+                )
+                return False
             has_cap_bpf: bool = bool(cap_eff & (1 << _CAP_BPF_BIT))
             has_cap_perfmon: bool = bool(cap_eff & (1 << _CAP_PERFMON_BIT))
 

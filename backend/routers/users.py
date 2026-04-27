@@ -22,6 +22,7 @@ from backend.schemas.user import (
     UserUpdate,
     UserUpdateSelf,
 )
+from backend.repositories.user_repository import UserRepository
 from backend.services.auth_service import get_current_user, require_admin
 from backend.services.model_candidate_service import ModelCandidateService
 from backend.services.user_service import UserService
@@ -211,7 +212,6 @@ async def get_model_candidates(
 
     # Virtual Key を復号して取得する
     try:
-        from backend.repositories.user_repository import UserRepository
         repo = UserRepository(db)
         user = repo.get_by_username(username)
         if user is None or not user.virtual_key_encrypted:

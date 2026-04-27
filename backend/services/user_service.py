@@ -107,11 +107,7 @@ class UserService:
 
         def _run() -> tuple[bool, str]:
             """別スレッドで非同期検証を実行する。"""
-            loop = asyncio.new_event_loop()
-            try:
-                return loop.run_until_complete(service.validate_key(key))
-            finally:
-                loop.close()
+            return asyncio.run(service.validate_key(key))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_run)
