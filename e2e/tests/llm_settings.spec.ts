@@ -87,8 +87,8 @@ test('TS-C-2: 無効なLLMキーはGUIエラーが表示され保存されない
   await page.waitForTimeout(2000);
   const currentUrl = page.url();
   // URL が変わった場合（/users/:username へ遷移）または
-  // エラーが表示された場合のどちらかであることを確認する
-  const hasError = await page.locator('[type="error"]').isVisible();
+  // エラーアラートが表示された場合のどちらかであることを確認する
+  const hasError = await page.locator('.v-alert--variant-tonal, [role="alert"]').first().isVisible();
   const urlChanged = !currentUrl.includes('/edit');
   expect(hasError || urlChanged).toBeTruthy();
 });
@@ -106,7 +106,7 @@ test('TS-C-3: モデルフィールドにサジェスト候補が表示される
 
   // デフォルトモデルフィールドが表示されていることを確認する
   // v-combobox または v-text-field のどちらかが表示されているはず
-  const modelField = page.getByLabel('デフォルトモデル');
+  const modelField = page.getByRole('combobox', { name: 'デフォルトモデル' });
   await expect(modelField).toBeVisible();
 
   // フィールドをクリックしてドロップダウン候補を確認する
@@ -131,7 +131,7 @@ test('TS-C-4: モデル候補取得失敗時もサジェスト非表示で保存
   await page.waitForLoadState('networkidle');
 
   // モデルフィールドが表示されていることを確認する（候補なしでも通常フィールドとして機能）
-  const modelField = page.getByLabel('デフォルトモデル');
+  const modelField = page.getByRole('combobox', { name: 'デフォルトモデル' });
   await expect(modelField).toBeVisible();
 
   // モデル名を直接入力できることを確認する

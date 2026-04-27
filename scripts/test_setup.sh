@@ -150,7 +150,7 @@ echo "  Backend 起動確認済み"
 echo "  Alembic マイグレーションを実行します..."
 ALEMBIC_SUCCESS=false
 for i in $(seq 1 5); do
-    if docker compose run --rm -T backend sh -c "cd /app/backend && alembic upgrade head" 2>&1; then
+    if docker compose exec -T backend sh -c "cd /app/backend && alembic upgrade head" 2>&1; then
         ALEMBIC_SUCCESS=true
         break
     fi

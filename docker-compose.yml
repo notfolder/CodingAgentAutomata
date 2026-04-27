@@ -28,10 +28,10 @@ services:
       - codingagent_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-db}"]
-      interval: 5s
-      timeout: 5s
+      interval: 3s
+      timeout: 3s
       retries: 10
-      start_period: 10s
+      start_period: 5s
 
   # -------------------------------------------------------
   # PostgreSQL（LiteLLM 専用）
@@ -50,10 +50,10 @@ services:
       - codingagent_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U litellm -d litellm_db"]
-      interval: 5s
-      timeout: 5s
+      interval: 3s
+      timeout: 3s
       retries: 10
-      start_period: 10s
+      start_period: 5s
 
   # -------------------------------------------------------
   # RabbitMQ メッセージキュー（管理UIあり）
@@ -311,7 +311,6 @@ services:
       TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
       # Webhook エンドポイント（グループWebhookテスト用）
       WEBHOOK_URL: http://producer:8080/webhook
-      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-test-webhook-secret}
     volumes:
       - ./e2e:/e2e
     networks:
@@ -352,7 +351,6 @@ services:
       TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
       # Webhook エンドポイント（グループWebhookテスト用）
       WEBHOOK_URL: http://producer:8080/webhook
-      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-test-webhook-secret}
     volumes:
       - ./e2e:/e2e
     networks:
