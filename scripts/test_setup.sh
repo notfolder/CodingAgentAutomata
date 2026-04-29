@@ -354,10 +354,95 @@ echo ""
 echo "テスト環境セットアップが完了しました。"
 
 # -------------------------------------------------------
+# 補助: テスト実行の前後でキュー/タスク状態をクリーンアップする
+# -------------------------------------------------------
+cleanup_test_runtime_state() {
+    local phase="$1"
+
+    echo ""
+    echo "[クリーンアップ:${phase}] consumer停止 → キュー掃除 → pending/running整理 → consumer再起動 を実行します..."
+
+    # クリーンアップ失敗で本処理を止めないように一時的にerrexitを無効化
+    set +e
+
+    # 1) consumer 停止（処理中タスクの再配信状態を作る）
+    docker compose stop consumer >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "  consumer を停止しました"
+    else
+        echo "  警告: consumer の停止に失敗しました（続行）" >&2
+    fi
+
+    # 2) RabbitMQ tasks キューをパージ
+    local rabbitmq_user="${RABBITMQ_DEFAULT_USER:-guest}"
+    local rabbitmq_pass="${RABBITMQ_DEFAULT_PASS:-guest}"
+    local rabbitmq_mgmt_url="${RABBITMQ_MGMT_URL:-http://localhost:15672}"
+    local queue_status
+    queue_status=$(curl -s -o /dev/null -w "%{http_code}" -u "${rabbitmq_user}:${rabbitmq_pass}" \
+        -X DELETE "${rabbitmq_mgmt_url}/api/queues/%2F/tasks/contents")
+    if [ "${queue_status}" = "200" ] || [ "${queue_status}" = "204" ]; then
+        echo "  RabbitMQ tasks キューをパージしました (HTTP ${queue_status})"
+    else
+        echo "  警告: RabbitMQ tasks キューのパージに失敗しました (HTTP ${queue_status})" >&2
+    fi
+
+    # 3) DB の pending/running タスクを failed に更新
+    local db_user="${POSTGRES_USER:-user}"
+    local db_name="${POSTGRES_DB:-db}"
+    local db_update_output
+    db_update_output=$(docker compose exec -T postgresql psql -U "${db_user}" -d "${db_name}" -At -c "
+WITH updated AS (
+  UPDATE tasks
+     SET status = 'failed',
+         error_message = CASE
+           WHEN error_message IS NULL OR error_message = '' THEN '[test-cleanup] テストクリーンアップにより強制終了扱いにしました'
+           ELSE error_message || E'\\n[test-cleanup] テストクリーンアップにより強制終了扱いにしました'
+         END,
+         completed_at = NOW()
+   WHERE status IN ('pending', 'running')
+ RETURNING 1
+)
+SELECT COUNT(*) FROM updated;
+")
+    if [ $? -eq 0 ]; then
+        echo "  pending/running タスクを failed 化しました: ${db_update_output}件"
+    else
+        echo "  警告: pending/running タスクの整理に失敗しました（続行）" >&2
+    fi
+
+    # 4) consumer 再起動
+    docker compose up -d consumer >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "  consumer を再起動しました"
+    else
+        echo "  警告: consumer の再起動に失敗しました（続行）" >&2
+    fi
+
+    # 元のerrexit動作に戻す
+    set -e
+}
+
+# -------------------------------------------------------
 # ステップ 7（オプション）: E2E テスト実行
 # -------------------------------------------------------
 if [ "${RUN_TESTS}" = "true" ]; then
     echo ""
     echo "[ステップ 7] E2E テストを実行します（Playwright: ${PLAYWRIGHT_SERVICE}）..."
+
+    # テスト前にキュー/タスク状態を明示的にクリーンアップ
+    cleanup_test_runtime_state "テスト実行前"
+
+    # テスト失敗時も後処理を実行できるように一時的にerrexitを無効化
+    set +e
     docker compose run --rm "${PLAYWRIGHT_SERVICE}" sh -c "npm install --silent && npx playwright test 2>&1"
+    PLAYWRIGHT_EXIT_CODE=$?
+    set -e
+
+    # テスト後にもキュー/タスク状態をクリーンアップ（次回実行への持ち越し防止）
+    cleanup_test_runtime_state "テスト実行後"
+
+    if [ ${PLAYWRIGHT_EXIT_CODE} -ne 0 ]; then
+        echo "エラー: E2E テストが失敗しました (exit code: ${PLAYWRIGHT_EXIT_CODE})" >&2
+        exit ${PLAYWRIGHT_EXIT_CODE}
+    fi
 fi
