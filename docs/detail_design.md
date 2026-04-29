@@ -1,950 +1,577 @@
-# CodingAgentAutomata 詳細設計書
-
-この文書は、現行リポジトリ実装に基づく詳細設計書である。要件上の理想形ではなく、2026年4月24日時点でリポジトリに存在する実装内容と運用前提を記載する。
+# CodingAgentAutomata 変更詳細設計書（TTY入力待機検知 / Group Webhook運用 / LLM設定検証）
 
 ## 1. 言語・フレームワーク
 
-| 対象 | 採用技術 | 補足 |
-| --- | --- | --- |
-| バックエンドAPI | Python 3.12 / FastAPI | 管理API、認証、設定管理を担当する |
-| Producer | Python 3.12 / aiohttp | Webhook受信とポーリングを担当する |
-| Consumer | Python 3.12 / asyncio | RabbitMQからのタスク処理を担当する |
-| フロントエンド | Vue 3 / TypeScript / Vuetify / Pinia | 管理画面を担当する |
-| フロント配信 | nginx | Vueビルド成果物の配信と /api 逆プロキシを担当する |
-| データベース | PostgreSQL 16 | アプリケーションデータ永続化を担当する |
-| メッセージキュー | RabbitMQ 3.13 | ProducerとConsumerの疎通を担当する |
-| E2Eテスト | Playwright | docker compose上でGUI操作を行う |
+### 1.1 変更方針
 
-### 1.1 フロントエンドとAPIの接続
+| 区分 | 変更前 | 変更後 | 理由 |
+|---|---|---|---|
+| バックエンド | Python 3.12 / FastAPI | 変更なし | 既存資産を維持し、機能追加のみで要件を満たせるため |
+| Consumer 実行形態 | 通常コンテナ | DinDベースコンテナへ変更（eBPF利用条件を満たす） | TTY待機検知を成立させる必須前提 |
+| Webhook運用 | Project Webhook前提が混在 | Group Webhook標準へ統一 | 運用集約と設定漏れ低減 |
+| フロントエンド | Vue3 + Vuetify | 変更なし（設定画面に検証UIを追加） | GUI追加不要で既存画面拡張で対応可能 |
 
-- フロントエンドは nginx 配下で配信される
-- APIリクエストは /api 配下へ送信する
-- FastAPI 側は各ルーターを /api プレフィックスで登録する
-- フロントエンドの axios クライアントは /api を baseURL とする
+### 1.2 フロント/バックの接続
+
+既存設計を継続する。
+
+- nginx でフロント配信
+- API は /api 配下
+- フロントから /api 配下へリクエスト
 
 ## 2. システム構成
 
-### 2.1 コンポーネント一覧
+### 2.1 変更対象コンポーネント一覧
 
-| コンポーネント | 役割 | 常時利用 |
-| --- | --- | --- |
-| frontend | 管理画面配信、/api 逆プロキシ | はい |
-| backend | 認証、ユーザー管理、タスク一覧、設定管理API | はい |
-| producer | GitLab Webhook受信、GitLabポーリング、タスク投入 | はい |
-| consumer | タスク処理、CLIコンテナ管理、進捗報告 | はい |
-| postgresql | users、tasks、cli_adapters、system_settings の保持 | はい |
-| rabbitmq | tasks キューの保持 | はい |
-| postgresql_litellm | LiteLLM 用DB | テスト系のみ |
-| mock_llm | モックLLMサーバー | test プロファイル |
-| gitlab | GitLab CE テスト環境 | test / test-real プロファイル |
-| litellm | モックLLMを背後に持つ LiteLLM Proxy | test プロファイル |
-| litellm_real | 実LLMを背後に持つ LiteLLM Proxy | test-real プロファイル |
-| test_playwright | Playwright 実行コンテナ | test プロファイル |
-| test_playwright_real | Playwright 実行コンテナ | test-real プロファイル |
-| cli_exec_claude | Claude系 CLI イメージビルド用サービス | build-only プロファイル |
-| cli_exec_opencode | opencode CLI イメージビルド用サービス | build-only プロファイル |
+| コンポーネント | 変更内容 | 変更種別 |
+|---|---|---|
+| consumer | DinD実行前提、eBPF初期化判定、Tracee監視、TTY待機時強制終了 | 変更 |
+| consumer/CLIContainerManager | cli-exec起動後にgit config実行、Tracee管理APIを追加 | 変更 |
+| consumer/MRProcessor | TTY検知イベント統合、失敗報告拡張 | 変更 |
+| producer/WebhookServer | Group Webhookイベント取り込みを標準化 | 変更 |
+| producer/GitLabEventHandler | Idempotency-Keyによる重複受信防御 | 変更 |
+| backend/users settings API | LLMキー保存時バリデーション導入 | 変更 |
+| frontend 設定画面 | モデル候補表示 + 手入力許可 + 保存時エラー表示 | 変更 |
+| postgresql | 新規テーブルなし | 変更なし |
+| rabbitmq | キュー利用方式は維持 | 変更なし |
 
-### 2.2 全体構成図
-
-```mermaid
-graph TB
-    subgraph External
-        Browser[ブラウザ]
-        GitLabExt[GitLab API / GitLab Webhook]
-        LLM[LiteLLM Proxy]
-    end
-
-    subgraph DockerCompose
-        Frontend[frontend: nginx + Vue]
-        Backend[backend: FastAPI]
-        Producer[producer]
-        Consumer[consumer]
-        Postgres[(postgresql)]
-        Rabbit[(rabbitmq)]
-        CliExec[cli-exec 動的コンテナ]
-
-        subgraph TestProfile
-            GitLabCE[gitlab]
-            MockLLM[mock_llm]
-            LiteLLM[litellm / litellm_real]
-            PW[test_playwright / test_playwright_real]
-            LiteDB[(postgresql_litellm)]
-        end
-    end
-
-    Browser --> Frontend
-    Frontend -->|/api| Backend
-    Producer --> GitLabExt
-    GitLabExt -->|Webhook| Producer
-    Producer --> Rabbit
-    Consumer --> Rabbit
-    Consumer --> CliExec
-    CliExec --> LLM
-    Backend --> Postgres
-    Producer --> Postgres
-    Consumer --> Postgres
-    LiteLLM --> LiteDB
-    LiteLLM --> MockLLM
-    PW --> Frontend
-    PW --> Backend
-    PW --> GitLabCE
-```
-
-### 2.3 ネットワーク構成
-
-- すべてのサービスは codingagent_net 上で接続する
-- frontend は 80 番ポートを公開する
-- backend は 8000 番ポートを公開する
-- producer はコンテナ内で GitLab Webhook を受ける HTTP 待受を行う（docker-compose では producer の待受ポートをホスト公開しない）
-- rabbitmq は 5672 と 15672 を公開する
-- postgresql は 5432 を公開する
-- consumer は docker.sock をマウントし、動的に CLI コンテナを起動する
-
-## 3. データベース設計
-
-### 3.1 アプリケーションDBの対象
-
-アプリケーション本体では PostgreSQL を使用する。永続化対象は users、cli_adapters、tasks、system_settings の4テーブルである。
-
-LiteLLM 用の postgresql_litellm は本体DBとは独立したテスト系補助DBであり、本節の業務データ設計対象には含めない。
-
-### 3.2 テーブル一覧
-
-| テーブル名 | 役割 |
-| --- | --- |
-| users | システム利用者、認証情報、Virtual Key、既定CLI設定を保持する |
-| cli_adapters | 利用可能なCLIアダプタ設定を保持する |
-| tasks | Issue/MR処理の状態と実行ログを保持する |
-| system_settings | F-3/F-4テンプレートと system_mcp_config を保持する |
-
-### 3.3 users
-
-| カラム名 | 型 | 制約 | 説明 |
-| --- | --- | --- | --- |
-| username | VARCHAR(255) | PK | ユーザー名 |
-| email | VARCHAR(255) | UNIQUE, NOT NULL | メールアドレス |
-| virtual_key_encrypted | BYTEA | NOT NULL | 暗号化済み Virtual Key |
-| default_cli | VARCHAR(255) | FK cli_adapters.cli_id, NOT NULL | 既定CLI |
-| default_model | VARCHAR(255) | NOT NULL | 既定モデル |
-| role | VARCHAR(20) | CHECK admin/user, NOT NULL | 権限 |
-| is_active | BOOLEAN | NOT NULL | 有効フラグ |
-| password_hash | VARCHAR(255) | NOT NULL | bcrypt ハッシュ |
-| system_mcp_enabled | BOOLEAN | NOT NULL | システムMCP適用フラグ |
-| user_mcp_config | JSONB | NULL | ユーザー個別MCP設定 |
-| f4_prompt_template | TEXT | NULL | ユーザー個別F-4テンプレート |
-| created_at | TIMESTAMPTZ | NOT NULL | 作成日時 |
-| updated_at | TIMESTAMPTZ | NOT NULL | 更新日時 |
-
-### 3.4 cli_adapters
-
-| カラム名 | 型 | 制約 | 説明 |
-| --- | --- | --- | --- |
-| cli_id | VARCHAR(255) | PK | CLI識別子 |
-| container_image | VARCHAR(512) | NOT NULL | 実行イメージ |
-| start_command_template | TEXT | NOT NULL | 起動コマンドテンプレート |
-| env_mappings | JSONB | NOT NULL | 環境変数マッピング |
-| config_content_env | VARCHAR(255) | NULL | 設定JSONを渡す環境変数名 |
-| is_builtin | BOOLEAN | NOT NULL | 組み込みフラグ |
-| created_at | TIMESTAMPTZ | NOT NULL | 作成日時 |
-| updated_at | TIMESTAMPTZ | NOT NULL | 更新日時 |
-
-### 3.5 tasks
-
-| カラム名 | 型 | 制約 | 説明 |
-| --- | --- | --- | --- |
-| task_uuid | UUID | PK | タスク識別子 |
-| task_type | VARCHAR(50) | CHECK issue/merge_request, NOT NULL | タスク種別 |
-| gitlab_project_id | BIGINT | NOT NULL | GitLabプロジェクトID |
-| source_iid | BIGINT | NOT NULL | Issue IID または MR IID |
-| username | VARCHAR(255) | FK users.username, NOT NULL | 処理対象ユーザー |
-| status | VARCHAR(20) | CHECK pending/running/completed/failed, NOT NULL | 状態 |
-| cli_type | VARCHAR(255) | FK cli_adapters.cli_id, NULL | 実行CLI |
-| model | VARCHAR(255) | NULL | 実行モデル |
-| cli_log | TEXT | NULL | 実行ログ |
-| error_message | TEXT | NULL | エラー内容 |
-| created_at | TIMESTAMPTZ | NOT NULL | 作成日時 |
-| started_at | TIMESTAMPTZ | NULL | 開始日時 |
-| completed_at | TIMESTAMPTZ | NULL | 完了日時 |
-
-同一の gitlab_project_id、source_iid、task_type に対して、status が pending または running の行が複数存在しないように部分ユニークインデックスを作成する。
-
-### 3.6 system_settings
-
-| カラム名 | 型 | 制約 | 説明 |
-| --- | --- | --- | --- |
-| key | VARCHAR(255) | PK | 設定キー |
-| value | TEXT | NOT NULL | 設定値 |
-| updated_at | TIMESTAMPTZ | NOT NULL | 更新日時 |
-
-管理対象キーは以下の3件である。
-
-| キー | 用途 |
-| --- | --- |
-| f3_prompt_template | Issue から MR を生成するプロンプトテンプレート |
-| f4_prompt_template | MR 処理の既定テンプレート |
-| system_mcp_config | システム共通 MCP 設定 |
-
-### 3.7 ER図
-
-```mermaid
-erDiagram
-    users ||--o{ tasks : username
-    cli_adapters ||--o{ users : default_cli
-    cli_adapters ||--o{ tasks : cli_type
-
-    users {
-        VARCHAR username PK
-        VARCHAR email UK
-        BYTEA virtual_key_encrypted
-        VARCHAR default_cli FK
-        VARCHAR default_model
-        VARCHAR role
-        BOOLEAN is_active
-        VARCHAR password_hash
-        BOOLEAN system_mcp_enabled
-        JSONB user_mcp_config
-        TEXT f4_prompt_template
-    }
-
-    cli_adapters {
-        VARCHAR cli_id PK
-        VARCHAR container_image
-        TEXT start_command_template
-        JSONB env_mappings
-        VARCHAR config_content_env
-        BOOLEAN is_builtin
-    }
-
-    tasks {
-        UUID task_uuid PK
-        VARCHAR task_type
-        BIGINT gitlab_project_id
-        BIGINT source_iid
-        VARCHAR username FK
-        VARCHAR status
-        VARCHAR cli_type FK
-        VARCHAR model
-        TEXT cli_log
-        TEXT error_message
-    }
-
-    system_settings {
-        VARCHAR key PK
-        TEXT value
-    }
-```
-
-### 3.8 業務エンティティ一覧
-
-| エンティティ | 一覧 | 詳細 | 作成 | 更新 | 削除 | 検索 | 状態管理 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| users | あり | あり | あり | あり | あり | username 前方一致 | is_active による有効/無効 |
-| cli_adapters | あり | 一覧ベース | あり | あり | あり | cli_id 単位 | is_builtin は保護属性であり業務状態ではない |
-| tasks | あり | 専用詳細APIなし | Producer が作成 | Consumer が更新 | なし | username, status, task_type | pending, running, completed, failed |
-| system_settings | なし | 一括取得 | 初期化時に投入 | あり | なし | キー単位 | 業務状態は持たない |
-
-### 3.9 エンティティ対応関係
-
-| エンティティ | 画面 | API | 主担当クラス |
-| --- | --- | --- | --- |
-| users | /users, /users/new, /users/:username, /users/:username/edit | /api/users, /api/users/{username}, /api/users/{username}/me | UserService, UserRepository |
-| cli_adapters | /settings | /api/cli-adapters, /api/cli-adapters/{cli_id} | CLIAdapterService, CLIAdapterRepository |
-| tasks | /tasks | /api/tasks | TaskService, TaskRepository, TaskProcessor |
-| system_settings | /settings | /api/settings | SystemSettingsService, SystemSettingsRepository |
-
-## 4. 外部設計
-
-### 4.1 画面一覧
-
-| 画面 | パス | 権限 | 説明 |
-| --- | --- | --- | --- |
-| ログイン | /login | 未認証可 | JWTログインを行う |
-| ユーザー一覧 | /users | admin | ユーザー検索と一覧表示を行う |
-| ユーザー作成 | /users/new | admin | 新規ユーザーを作成する |
-| ユーザー詳細 | /users/:username | admin または本人 | ユーザー詳細を表示する |
-| ユーザー編集 | /users/:username/edit | admin または本人 | ユーザー情報を編集する |
-| タスク一覧 | /tasks | 認証済み | タスク履歴を表示する |
-| システム設定 | /settings | admin | F-3/F-4テンプレートとCLI設定を扱う |
-
-### 4.2 画面遷移
-
-```mermaid
-graph TD
-    Login[/login/] -->|admin| Users[/users/]
-    Login -->|user| Tasks[/tasks/]
-    Users --> UserDetail[/users/:username/]
-    Users --> UserCreate[/users/new/]
-    UserDetail --> UserEdit[/users/:username/edit/]
-    Users --> Tasks
-    Users --> Settings[/settings/]
-    Settings --> Users
-```
-
-### 4.3 フロントエンドの認可制御
-
-- 未認証で認証必須画面へ遷移した場合は /login へリダイレクトする
-- 認証済みで /login に遷移した場合は admin は /users、一般ユーザーは /tasks にリダイレクトする
-- 一般ユーザーが管理者専用画面へ遷移した場合は /tasks にリダイレクトする
-- 一般ユーザーが他ユーザーの詳細画面または編集画面へ遷移した場合は /tasks にリダイレクトする
-
-### 4.4 API一覧
-
-| メソッド | パス | 権限 | 説明 |
-| --- | --- | --- | --- |
-| POST | /api/auth/login | 認証不要 | JWTトークンを発行する |
-| GET | /api/users | admin | ユーザー一覧を取得する |
-| POST | /api/users | admin | ユーザーを作成する |
-| GET | /api/users/{username} | admin または本人 | ユーザー詳細を取得する |
-| PUT | /api/users/{username} | admin | 管理者権限でユーザーを更新する（Virtual Key 保存時にLLMキー妥当性チェックを実施） |
-| PUT | /api/users/{username}/me | 本人 | 一般ユーザーが自分を更新する |
-| DELETE | /api/users/{username} | admin | ユーザーを削除する |
-| GET | /api/users/{username}/model-candidates | admin または本人 | モデル候補一覧を取得する（LiteLLMから取得し、失敗時は空リストを返す） |
-| GET | /api/tasks | 認証済み | タスク一覧を取得する |
-| GET | /api/cli-adapters | admin | CLIアダプタ一覧を取得する |
-| POST | /api/cli-adapters | admin | CLIアダプタを作成する |
-| PUT | /api/cli-adapters/{cli_id} | admin | CLIアダプタを更新する |
-| DELETE | /api/cli-adapters/{cli_id} | admin | CLIアダプタを削除する |
-| GET | /api/settings | admin | システム設定を取得する |
-| PUT | /api/settings | admin | システム設定を更新する |
-| GET | /health | 認証不要 | backend ヘルスチェック |
-
-### 4.5 外部システム連携
-
-| 外部システム | 連携方法 | 目的 |
-| --- | --- | --- |
-| GitLab REST API | HTTPS REST API | Issue/MR取得、コメント投稿、ブランチ作成、MR作成 |
-| GitLab Webhook | HTTP POST | Issue/MRイベント受信 |
-| LiteLLM Proxy | HTTP API | CLI実行時のモデル呼び出し先 |
-
-### 4.6 外部データベース連携
-
-外部データベースとの直接連携は行わない。アプリケーションが利用する永続化先は PostgreSQL のみであり、外部DB連携設計は不要とする。
-
-### 4.7 APIバリデーション・エラー仕様
-
-| 区分 | 内容 |
-| --- | --- |
-| 共通入力検証 | FastAPI と Pydantic スキーマで型、必須項目、制約を検証する |
-| 400 | ロール値不正、現在パスワード不足、組み込みCLI削除、参照中CLI削除などの業務エラー |
-| 401 | ログイン失敗、JWT不正、JWT期限切れ |
-| 403 | admin 権限不足、本人以外の参照更新 |
-| 404 | 対象ユーザー、CLIアダプタ、タスク、GitLabリソース不在 |
-| 409 | email 重複、cli_id 重複、タスク重複挿入 |
-| 422 | リクエストボディやクエリのバリデーション不正 |
-
-### 4.8 CUI引数・環境変数仕様
-
-| コンポーネント | 起動方式 | 主な設定受け取り |
-| --- | --- | --- |
-| backend | コンテナ起動時に自動起動 | `DATABASE_URL`、`JWT_SECRET_KEY`（JWT有効期限は実装固定24時間） |
-| producer | `python producer.py` | `RABBITMQ_URL`、`GITLAB_API_URL`、`GITLAB_WEBHOOK_SECRET`、`POLLING_INTERVAL_SECONDS` |
-| consumer | `python consumer.py` | `RABBITMQ_URL`、`DATABASE_URL`、`CLI_EXEC_TIMEOUT_SEC`、`PROGRESS_REPORT_INTERVAL_SEC`、`PROGRESS_REPORT_SUMMARY_LINES` |
-| setup系スクリプト | 手動実行 | `.env` のAPIキー、GitLab接続情報、LiteLLM接続情報 |
-
-CLI実行コンテナへは、CLIアダプタ設定の `env_mappings` と `config_content_env` に基づき必要な環境変数を注入する。プロンプト本文は環境変数ではなく `/tmp/prompt.txt` を介して受け渡す。
-
-cli-execコンテナは、以下の言語・フレームワークを標準でサポートする。
-
-| 言語 / FW | 標準サポート内容 |
-| --- | --- |
-| Python | Python・`uv`パッケージマネージャ |
-| Node.js / npm | Node.js・`npm` |
-| Playwright | Playwright（ブラウザテスト実行環境含む） |
-
-## 5. 内部設計
-
-### 5.0 全機能ユーザー利用フロー
-
-システム全体の利用の流れを俯瞰するため、管理者によるユーザー登録から Issue 処理、MR 処理完了までの主要フローを以下に示す。
+### 2.2 全体構成図（変更後）
 
 ```mermaid
 flowchart TD
-    A[管理者がユーザーを新規登録する] --> B[GitLabユーザー名・Virtual Key・デフォルトCLI・モデルを入力して作成]
-    B --> C[GitLab開発者がIssueを作成する]
-    C --> D[IssueにbotをアサインしてGitLabラベルを付与する]
-    D --> E{Webhook受信 または ポーリング検出}
-    E --> F[IssueからMR生成処理を開始する]
-    F --> G[IssueのauthorのVirtual Keyを取得する]
-    G --> G2[Issueに処理中ラベルを付与する]
-    G2 --> H[cli-execコンテナを起動してCLIを実行し、ブランチ名・MRタイトルを生成する]
-    H --> I[GitLab APIで作業ブランチとDraft MRを作成する]
-    I --> I2[IssueのauthorをMRの最初のレビュアーに設定する]
-    I2 --> I3[IssueのコメントをMRへコピーする]
-    I3 --> J[IssueにMR作成完了コメントを投稿する]
-    J --> J2[Issueはクローズしない]
-    J2 --> K[次のWebhookまたはポーリングでMRを検出する]
-    K --> L[MR処理を開始する]
-    L --> M[最初のレビュアーのVirtual Keyを取得する]
-    M --> M2[MRに処理中ラベルを付与する]
-    M2 --> N[MR descriptionからCLI種別・モデルを決定する]
-    N --> O[cli-execコンテナを起動し、MRブランチをcloneしてcheckoutする]
-    O --> P[Virtual Keyを設定してCLIを起動する]
-    P --> P2[MRに処理開始コメントを投稿する]
-    P2 --> Q[CLIがdescriptionの指示に従いコード変更・テストを実行する]
-    Q --> Q2[CLIの標準出力を定期的にMRへ進捗コメントとして投稿する]
-    Q2 --> R[変更をコミット・プッシュする]
-    R --> S[MRの処理中ラベルを削除し完了コメントを投稿しdoneラベルを付与する]
+    GL[GitLab CE Group Webhook]
+    PR[producer]
+    MQ[RabbitMQ tasks]
+    CS[consumer DinD]
+    CL[cli-exec container]
+    TR[tracee container]
+    BK[backend FastAPI]
+    FE[frontend Vue]
+    DB[(PostgreSQL)]
+    LT[LiteLLM/Model APIs]
+
+    GL --> PR
+    PR --> MQ
+    MQ --> CS
+    CS --> CL
+    CL --> TR
+    CL --> LT
+    FE --> BK
+    BK --> DB
+    PR --> DB
+    CS --> DB
 ```
 
-### 5.1 Webhook受信フロー
+### 2.3 コンポーネント間インターフェース
+
+| 送信元 | 送信先 | I/F | 主データ |
+|---|---|---|---|
+| GitLab | producer | HTTPS POST (Group Webhook) | イベント payload + Idempotency-Key |
+| producer | RabbitMQ | AMQP | task message |
+| consumer | cli-exec | Docker API | 起動コマンド、環境変数、prompt |
+| consumer | tracee | Docker API | tracee起動/停止、イベント取得 |
+| consumer | GitLab | REST API | コメント投稿、MR/Issue情報 |
+| backend | LiteLLM等 | HTTP | キー妥当性検証、モデル候補取得 |
+
+### 2.4 ネットワーク構成図
+
+```mermaid
+graph TB
+  subgraph compose-network
+    FE[frontend]
+    BK[backend]
+    PR[producer]
+    CS[consumer DinD]
+    DB[(postgresql)]
+    MQ[(rabbitmq)]
+  end
+
+  GL[GitLab CE] --> PR
+  FE --> BK
+  BK --> DB
+  PR --> DB
+  PR --> MQ
+  CS --> MQ
+  CS --> DB
+  CS --> GL
+```
+
+---
+
+## 3. データベース設計
+
+### 3.1 DB要否
+
+既存要件どおり PostgreSQL は必須であり継続利用する。新規DBは追加しない。
+
+### 3.2 スキーマ変更方針
+
+| 項目 | 方針 |
+|---|---|
+| 新規テーブル | 追加しない |
+| 既存カラム | 追加しない |
+| 利用カラム | tasks.error_message / tasks.cli_log をTTY検知詳細で活用 |
+| 既存制約 | tasks の重複防止制約を継続利用 |
+
+### 3.3 データ整合性（PK/FK/業務制約）
+
+| 対象 | 制約 |
+|---|---|
+| users | username PK、email UNIQUE |
+| tasks | task_uuid PK、username FK、cli_type FK |
+| tasks重複防止 | gitlab_project_id + source_iid + task_type + status(pending/running) の部分ユニーク |
+| Webhook重複 | Idempotency-Key を処理単位で判定し再処理抑止（永続化なし、受信処理内で防御） |
+
+### 3.4 ER関係（変更後）
+
+```mermaid
+erDiagram
+  users ||--o{ tasks : username
+  cli_adapters ||--o{ users : default_cli
+  cli_adapters ||--o{ tasks : cli_type
+```
+
+---
+
+## 4. アーキテクチャ設計
+
+### 4.1 外部設計（GUI/CUI）
+
+#### 4.1.1 GUI変更（ユーザー設定画面）
+
+- 画面追加は行わず、既存ユーザー設定画面を拡張する
+- 保存時にLLMキー妥当性チェックを実行する
+- モデル入力は単一フィールドとし、モデル候補取得成功時のみサジェストを表示する
+- モデル候補取得失敗時はサジェストを表示せず、同一フィールドへの直接入力で継続可能とする
+- エラーはGUIで完結表示し、バックエンド処理失敗と混同させない
+
+#### 4.1.2 画面一覧（変更対象のみ）
+
+| 画面 | 変更内容 |
+|---|---|
+| ユーザー編集 | LLMキー検証結果表示、単一モデル入力フィールド、候補サジェスト表示 |
+| システム設定 | F-3/F-4テンプレートに必須指示を含める運用を明示 |
+| タスク履歴 | TTY検知エラー理由の可視化（error_message/cli_log） |
+
+#### 4.1.3 画面遷移図（変更影響）
+
+```mermaid
+flowchart LR
+  UE[ユーザー編集] --> SV[保存]
+  SV --> KV{キー検証成功?}
+  KV -->|No| ER[画面内エラー表示]
+  KV -->|Yes| ML{モデル候補取得成功?}
+  ML -->|Yes| SG[モデルフィールドにサジェスト表示]
+  ML -->|No| NS[サジェストなし]
+  SG --> IN[同一モデルフィールドに入力/選択]
+  NS --> IN
+  IN --> OK[保存完了]
+```
+
+#### 4.1.4 AAモックアップ
+
+ユーザー編集画面（LLM設定領域）
+
+| 表示要素 | 内容 |
+|---|---|
+| 画面タイトル | ユーザー編集 |
+| LLMキー入力欄 | マスク表示で入力し、同一領域に検証結果を表示 |
+| 検証結果表示 | OK またはエラー理由を表示 |
+| モデル入力欄 | 単一入力欄を使用し、候補取得成功時のみサジェストを表示 |
+| 保存操作 | 保存ボタンとキャンセルボタンを表示 |
+
+### 4.2 外部システム連携設計
+
+| 外部システム | 連携内容 | 変更点 |
+|---|---|---|
+| GitLab Group Webhook | Issue/MRイベント受信 | Project固定依存を廃止 |
+| GitLab REST API | コメント投稿、MR/Issue取得 | TTY検知失敗文言を追加 |
+| LiteLLM/Model APIs | キー検証、モデル候補取得 | 保存時検証導入 |
+| Linuxカーネル(eBPF) | Traceeでread(2)監視 | DinD前提で導入 |
+
+#### 外部連携データフロー
 
 ```mermaid
 sequenceDiagram
-    participant GL as GitLab Group Webhook
-    participant WS as WebhookServer
-    participant EH as GitLabEventHandler
-    participant DB as PostgreSQL
-    participant MQ as RabbitMQ
+  participant GL as GitLab Group Webhook
+  participant PR as Producer
+  participant MQ as RabbitMQ
+  participant CS as Consumer
+  participant TR as Tracee
 
-    GL->>WS: POST /webhook (X-Idempotency-Key ヘッダー付き)
-    WS->>WS: X-Gitlab-Token と設定値を直接比較
-    alt 検証失敗
-        WS-->>GL: 403
-    else ペイロード不正
-        WS->>WS: WARNINGログを記録する
-        WS-->>GL: 200（GitLab再送に委譲）
-    else 検証成功
-        WS->>EH: handle_event(payload, idempotency_key)
-        EH->>EH: Idempotency-Key 重複チェック（メモリ内セット）
-        alt 重複受信
-            EH-->>WS: スキップ（DEBUG ログ）
-            WS-->>GL: 200
-        else 新規受信
-            EH->>EH: botアサイン、botラベル、doneラベル不在を判定
-            EH->>DB: pending/running 重複有無を確認
-            EH->>DB: tasks に pending を挿入
-            EH->>MQ: TaskMessage を publish
-            WS-->>GL: 200
-        end
-    end
+  GL->>PR: Issue/MR event + Idempotency-Key
+  PR->>PR: 重複受信判定
+  PR->>MQ: task publish
+  CS->>TR: eBPF監視開始
+  TR-->>CS: tty read wait event
+  CS->>GL: failedコメント投稿
 ```
 
-### 5.2 ポーリングフロー
+### 4.3 外部DB連携設計
 
-- producer は polling_interval_seconds ごとに対象プロジェクトを巡回する
-- Issue と Merge Request を GitLab API から取得する
-- GitLabEventHandler に共通処理を集約し、Webhook経由と同じ投入判定を行う
+外部DB連携は追加しない。既存どおり PostgreSQL のみ利用する。
 
-### 5.3 F-3 Issue から MR 生成
+### 4.4 内部設計（処理フロー）
 
-- 対象ユーザーを users から取得する
-- 無効ユーザーまたは未登録ユーザーの場合は Issue にエラーコメントを投稿して tasks を failed にする
-- system_settings と users の設定をマージして MCP 設定文字列を構築する
-- default_cli と default_model を使って CLI アダプタを解決する
-- CLI コンテナを起動し、/tmp/prompt.txt にプロンプトを書き込む
-- CLI標準出力の最終行JSONから branch_name と mr_title を取得する
-- GitLab にブランチを作成し、Draft MR を作成する
-- Issueコメントを MR にコピーし、Issue 側に完了コメントを投稿する
-- タスクを completed に更新する
+#### 4.4.1 TTY検知処理フロー
 
-### 5.4 F-4 MR 処理
+```mermaid
+flowchart TD
+  A[タスク開始] --> B[cli-exec起動]
+  B --> C[git config設定]
+  C --> D[eBPF利用可否判定]
+  D -->|不可| E[TTY検知無効で継続]
+  D -->|可| F[Tracee起動]
+  E --> G[CLI実行]
+  F --> G
+  G --> H{TTY待機検知?}
+  H -->|Yes| I[CLI強制終了]
+  I --> J[failedコメント投稿]
+  J --> K[tasksにerror_message/cli_log記録]
+  H -->|No| L[通常完了]
+  K --> M[コンテナ破棄]
+  L --> M
+```
 
-- 最初の reviewer を優先し、未設定時は author を処理ユーザーとする
-- MR description から agent: 行を解析し、CLI と model の上書きを行う
-- CLI コンテナを起動し、GitLab PAT を埋め込んだ clone URL でリポジトリを取得する
-- コンテナ起動直後に `git config --global user.name` および `user.email` を `GITLAB_BOT_NAME@localhost` で設定する
-- EBPFEnvironmentChecker で BTF 存在・ケーパビリティを確認して eBPF 利用可否を判定する
-  - 利用可能な場合は TTYWaitDetector（Tracee コンテナ）を起動して CLI の TTY read 待機を監視する
-  - 利用不可の場合は WARNING を記録して TTY 検知なしで継続する
-- CLI が TTY 待機状態を検知した場合は CLI を強制終了し、失敗コメントを GitLab へ投稿して tasks を failed にする（error_message と cli_log に検知情報を記録）
-- ProgressManager が一定間隔で1件の MR コメントを作成または更新する
-- monitor_assignees が一定間隔で bot のアサイン解除を監視する
-- 正常終了時はラベル更新、完了コメント投稿、tasks completed を行う
-- 失敗時はエラーコメント投稿、tasks failed を行う
+#### 4.4.2 Group Webhook処理フロー
 
-### 5.5 トランザクション境界
+```mermaid
+flowchart TD
+  A[Group Webhook受信] --> B[署名検証]
+  B --> C[Idempotency-Key重複判定]
+  C -->|重複| D[再処理せず2xx]
+  C -->|新規| E[task投入]
+  E --> F[2xx応答]
+  B -->|失敗| G[WARNINGログ]
+```
 
-| 処理 | 境界 | 備考 |
-| --- | --- | --- |
-| タスク投入 | tasks insert 単位 | 部分ユニーク制約で重複を防ぐ |
-| ユーザー作成・更新・削除 | 1API呼び出し単位 | Repository 経由で commit する |
-| タスク状態更新 | 1更新単位 | running、completed、failed を都度反映する |
-| システム設定更新 | 1API呼び出し単位 | 指定されたキーのみ更新する |
+#### 4.4.3 バッチ/定期処理
 
-### 5.6 排他制御
+- 既存ポーリング処理は継続
+- Webhook運用を主とし、ポーリングは補助（障害時補完）
+
+### 4.5 トランザクション境界・ロールバック条件
+
+| 処理 | 境界 | ロールバック条件 |
+|---|---|---|
+| Webhook受信からtask投入 | 1イベント単位 | DB挿入失敗・キュー投入失敗時は投入中止、WARNING記録 |
+| タスク状態更新 | 1状態遷移単位 | 更新失敗時は再実行せずfailed化して記録 |
+| ユーザー設定保存 | 1API呼び出し単位 | キー検証失敗時は保存ロールバック |
+| TTY検知失敗反映 | コメント投稿 + DB更新単位 | 片系失敗時は残りを継続実行し最終的にfailedで確定 |
+
+### 4.6 排他制御
 
 | 対象 | 方式 | 内容 |
-| --- | --- | --- |
-| タスク重複 | DB制約 | tasks_no_duplicate_active により pending/running の重複を防ぐ |
-| email 重複 | DB制約 | users.email の UNIQUE 制約 |
-| cli_id 重複 | PK制約 | cli_adapters.cli_id の主キー制約 |
+|---|---|---|
+| タスク重複 | 楽観 + DB制約 | 部分ユニーク制約違反で二重起動を防止 |
+| Webhook再送 | 楽観 | Idempotency-Key で同一イベント再処理抑止 |
+| ユーザー設定 | 楽観 | 更新時の入力検証で不正値保存を拒否 |
 
-### 5.7 状態遷移
+### 4.7 API入出力・バリデーション・エラー仕様（変更分）
 
-#### tasks の状態遷移
+| API | 入力 | 成功 | エラー |
+|---|---|---|---|
+| PUT /api/users/{username} | LLMキー、モデル | 200 + 保存済み設定 | 400(検証失敗), 403, 404, 422 |
+| GET /api/users/{username}/model-candidates | LLMキー | 200 + 候補一覧 | 400(キー不正), 502(外部取得失敗) |
+| POST /webhook | Group Webhook payload | 200/202 | 403(署名不正), 400(payload不備) |
 
-```mermaid
-stateDiagram-v2
-    [*] --> pending
-    pending --> running
-    running --> completed
-    running --> failed
-```
+エラー仕様の追加方針:
 
-#### users の状態管理
+- GUI入力エラーはユーザー修正可能な文言で返却
+- TTY待機検知は業務エラーとして failed に分類
+- eBPF利用不可は処理継続可能な WARNING とする
 
-```mermaid
-stateDiagram-v2
-    [*] --> active : 管理者がユーザー作成
-    active --> inactive : 管理者が無効化
-    inactive --> active : 管理者が有効化
-    active --> [*] : 管理者がユーザー削除
-    inactive --> [*] : 管理者がユーザー削除
-```
+---
 
-cli_adapters と system_settings は業務ワークフロー上の状態遷移を持たない。
+## 5. クラス設計
 
-#### cli_adapters のライフサイクルルール
+### 5.1 変更クラス一覧（SOLID適用）
 
-cli_adapters にはステータス管理はないが、以下のライフサイクルルールが適用される。
+| クラス | 役割 | S | O | L | I | D |
+|---|---|---|---|---|---|---|
+| TTYWaitDetector（新規） | Tracee起動・監視・判定 | ○ | ○ | ○ | ○ | ○ |
+| EBPFEnvironmentChecker（新規） | BTF/CAP判定 | ○ | ○ | ○ | ○ | ○ |
+| CLIContainerManager（変更） | git config設定、TTY監視開始/停止連携 | ○ | ○ | ○ | ○ | ○ |
+| MRProcessor（変更） | TTY検知失敗時の制御統合 | ○ | ○ | ○ | ○ | ○ |
+| GitLabEventHandler（変更） | Group Webhook + Idempotency判定 | ○ | ○ | ○ | ○ | ○ |
+| UserService（変更） | LLMキー保存時検証 | ○ | ○ | ○ | ○ | ○ |
+| ModelCandidateService（新規） | モデル候補取得 | ○ | ○ | ○ | ○ | ○ |
 
-| 操作 | 内容 |
-| --- | --- |
-| 初期データ投入 | システム初期化時に組み込みアダプタ（`claude`・`opencode`）が自動登録される |
-| 管理者による追加 | システム設定画面にて新規CLIアダプタを登録できる |
-| 管理者による編集 | システム設定画面にて既存アダプタの各属性を変更できる |
-| 管理者による削除 | `is_builtin = false` のアダプタのみ削除可能。削除時にそのCLIエージェントIDを `default_cli` に持つユーザーが存在する場合はエラーを返し削除を拒否する |
+### 5.2 主要属性・メソッド
 
-## 6. クラス・モジュール設計
+| クラス | 主な属性 | 主なメソッド |
+|---|---|---|
+| TTYWaitDetector | tracee_image, timeout_sec | start(), poll_event(), stop(), is_tty_wait() |
+| EBPFEnvironmentChecker | btf_path, cap_mask | check_btf(), check_caps(), evaluate() |
+| ModelCandidateService | endpoint, timeout | validate_key(), fetch_models() |
 
-### 6.1 主要クラス一覧
-
-| 配置 | クラスまたは実体 | 役割 |
-| --- | --- | --- |
-| shared/config/config.py | Settings | 環境変数設定を保持する |
-| shared/gitlab_client/gitlab_client.py | GitLabClient | GitLab API 操作を担当する |
-| shared/messaging/rabbitmq_client.py | RabbitMQClient | RabbitMQ publish/consume を担当する |
-| shared/models/db.py | User, Task, CLIAdapter, SystemSetting | ORMモデルを表す |
-| producer/gitlab_event_handler.py | GitLabEventHandler | イベント判定とタスク投入を担当する |
-| producer/gitlab_event_handler.py | DuplicateCheckService | タスク重複を確認する |
-| producer/webhook_server.py | WebhookServer | Webhook受信とトークン検証を担当する |
-| producer/polling_loop.py | PollingLoop | GitLabポーリングを担当する |
-| producer/producer.py | main | Producer全体起動を担当する |
-| consumer/consumer.py | ConsumerWorker | RabbitMQのデキューとディスパッチを担当する |
-| consumer/task_processor.py | TaskProcessor | task_type に応じて処理を振り分ける |
-| consumer/issue_to_mr_converter.py | IssueToMRConverter | F-3処理を担当する |
-| consumer/mr_processor.py | MRProcessor | F-4処理を担当する |
-| consumer/cli_container_manager.py | CLIContainerManager | CLIコンテナ操作・git config設定を担当する |
-| consumer/ebpf_environment_checker.py | EBPFEnvironmentChecker | BTF存在・ケーパビリティを確認してeBPF利用可否を判定する |
-| consumer/tty_wait_detector.py | TTYWaitDetector | Traceeコンテナを起動してCLIのTTY待機を検知する |
-| consumer/cli_adapter_resolver.py | CLIAdapterResolver | CLI起動情報を解決する |
-| consumer/progress_manager.py | ProgressManager | 進捗コメント更新を担当する |
-| consumer/prompt_builder.py | PromptBuilder | F-3/F-4プロンプトを構築する |
-| consumer/virtual_key_service.py | VirtualKeyService | Virtual Key の暗号化と復号を担当する |
-| consumer/cli_log_masker.py | CLILogMasker | ログ中の機密値マスクを担当する |
-| backend/services/auth_service.py | AuthService | JWT とパスワード認証を担当する |
-| backend/services/user_service.py | UserService | ユーザー業務ロジック・LLMキー保存時バリデーションを担当する |
-| backend/services/model_candidate_service.py | ModelCandidateService | LiteLLMキー検証・モデル候補取得を担当する |
-| backend/services/task_service.py | TaskService | タスク一覧取得を担当する |
-| backend/services/cli_adapter_service.py | CLIAdapterService | CLIアダプタ管理を担当する |
-| backend/services/system_settings_service.py | SystemSettingsService | システム設定管理を担当する |
-| backend/repositories/*.py | 各Repository | 永続化操作を担当する |
-| backend/routers/*.py | router | APIエンドポイント定義を担当する |
-
-### 6.2 モジュール関係図
+### 5.3 クラス図
 
 ```mermaid
 classDiagram
-    class GitLabClient
-    class RabbitMQClient
-    class Settings
-    class GitLabEventHandler
-    class DuplicateCheckService
-    class WebhookServer
-    class PollingLoop
-    class ConsumerWorker
-    class TaskProcessor
-    class IssueToMRConverter
-    class MRProcessor
-    class CLIContainerManager
-    class CLIAdapterResolver
-    class ProgressManager
-    class PromptBuilder
-    class VirtualKeyService
-    class CLILogMasker
-    class AuthService
-    class UserService
-    class TaskService
-    class CLIAdapterService
-    class SystemSettingsService
+  class MRProcessor
+  class CLIContainerManager
+  class TTYWaitDetector
+  class EBPFEnvironmentChecker
+  class GitLabEventHandler
+  class UserService
+  class ModelCandidateService
 
-    WebhookServer --> GitLabEventHandler
-    PollingLoop --> GitLabEventHandler
-    GitLabEventHandler --> DuplicateCheckService
-    GitLabEventHandler --> RabbitMQClient
-    GitLabEventHandler --> GitLabClient
-    ConsumerWorker --> TaskProcessor
-    TaskProcessor --> IssueToMRConverter
-    TaskProcessor --> MRProcessor
-    IssueToMRConverter --> CLIContainerManager
-    IssueToMRConverter --> CLIAdapterResolver
-    IssueToMRConverter --> PromptBuilder
-    IssueToMRConverter --> VirtualKeyService
-    IssueToMRConverter --> GitLabClient
-    MRProcessor --> CLIContainerManager
-    MRProcessor --> CLIAdapterResolver
-    MRProcessor --> ProgressManager
-    MRProcessor --> PromptBuilder
-    MRProcessor --> VirtualKeyService
-    MRProcessor --> GitLabClient
+  MRProcessor --> CLIContainerManager
+  MRProcessor --> TTYWaitDetector
+  TTYWaitDetector --> EBPFEnvironmentChecker
+  UserService --> ModelCandidateService
 ```
 
-## 7. ソースコード構成
+### 5.4 メッセージ一覧
 
-### 7.1 ディレクトリ構成
+| メッセージ | 送信元 | 宛先 | 内容 |
+|---|---|---|---|
+| WebhookReceived | GitLab | Producer | Group Webhookイベント |
+| TaskQueued | Producer | RabbitMQ | 非同期実行要求 |
+| TTYWaitDetected | TTYWaitDetector | MRProcessor | tty_read_wait 検知通知 |
+| TaskFailedReported | MRProcessor | GitLab | 失敗コメント投稿 |
+| LLMKeyValidationResult | Backend | Frontend | 保存可否と理由 |
 
-```text
-CodingAgentAutomata/
-├── .env.example
-├── docker-compose.yml
-├── backend/
-│   ├── alembic/
-│   ├── repositories/
-│   ├── routers/
-│   ├── schemas/
-│   ├── services/
-│   ├── Dockerfile
-│   ├── main.py
-│   └── pyproject.toml
-├── consumer/
-│   ├── Dockerfile
-│   ├── consumer.py
-│   ├── task_processor.py
-│   ├── issue_to_mr_converter.py
-│   ├── mr_processor.py
-│   ├── cli_container_manager.py
-│   ├── cli_adapter_resolver.py
-│   ├── progress_manager.py
-│   ├── prompt_builder.py
-│   ├── cli_log_masker.py
-│   ├── virtual_key_service.py
-│   └── pyproject.toml
-├── producer/
-│   ├── Dockerfile
-│   ├── producer.py
-│   ├── webhook_server.py
-│   ├── polling_loop.py
-│   ├── gitlab_event_handler.py
-│   └── pyproject.toml
-├── shared/
-│   ├── config/
-│   ├── database/
-│   ├── gitlab_client/
-│   ├── messaging/
-│   └── models/
-├── frontend/
-│   ├── src/
-│   │   ├── api/
-│   │   ├── plugins/
-│   │   ├── router/
-│   │   ├── stores/
-│   │   ├── views/
-│   │   ├── App.vue
-│   │   └── main.ts
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   ├── package.json
-│   └── vite.config.ts
-├── e2e/
-│   ├── tests/
-│   ├── global-setup.ts
-│   ├── package.json
-│   └── playwright.config.ts
-├── scripts/
-│   ├── setup.py
-│   ├── setup.sh
-│   ├── test_setup.py
-│   ├── test_setup.sh
-│   └── gitlab_setup.py
-└── cli-exec/
-    ├── claude/
-    └── opencode/
+### 5.5 メッセージフロー図
+
+```mermaid
+sequenceDiagram
+  participant FE as Frontend
+  participant BK as Backend
+  participant MD as ModelCandidateService
+
+  FE->>BK: 保存要求(LLMキー,モデル)
+  BK->>MD: validate_key
+  MD-->>BK: success/failure
+  BK-->>FE: 保存結果(OK/GUIエラー)
 ```
 
-### 7.2 完全ファイル対応表
+---
 
-#### Backend インフラストラクチャ
+## 6. その他設計
 
-| ファイル | 役割 |
-| --- | --- |
-| backend/main.py | FastAPI起動、Alembic自動実行、全ルーター登録、CORS設定、ヘルスチェック |
-| backend/Dockerfile | Python 3.12 ベースイメージ、FastAPI コンテナ構築、shared モジュールインストール |
-| backend/pyproject.toml | FastAPI、SQLAlchemy、Alembic、Pydantic 等の依存パッケージ定義 |
-| backend/alembic.ini | Alembic マイグレーションツール設定ファイル |
-| backend/alembic/env.py | Alembic 環境設定、オートマイグレーション有効化、DATABASE_URL 環境変数対応 |
-| backend/alembic/versions/__init__.py | マイグレーション版管理用 Python パッケージ初期化 |
-| backend/alembic/versions/001_initial.py | 初期テーブル作成マイグレーション（users、cli_adapters、tasks、system_settings） |
+### 6.1 エラーハンドリング一覧
 
-✅ **04/24チェック完了**
+| エラーID | 発生箇所 | 条件 | 対応 |
+|---|---|---|---|
+| E-TTY-001 | eBPF初期化 | BTF不足 | WARNING記録、TTY検知無効で継続 |
+| E-TTY-002 | eBPF初期化 | CAP不足 | WARNING記録、TTY検知無効で継続 |
+| E-TTY-003 | Tracee監視 | TTY待機検知 | CLI強制終了、failed報告 |
+| E-WB-001 | Webhook受信 | 署名不正 | 403応答、WARNING記録 |
+| E-WB-002 | Webhook処理 | 重複受信 | 再処理せず2xx |
+| E-LLM-001 | 設定保存 | キー妥当性失敗 | GUIエラー返却、保存中止 |
+| E-LLM-002 | 候補取得 | 外部取得失敗 | 手入力継続、WARNING記録 |
 
-#### Backend スキーマ定義
+### 6.2 セキュリティ設計
 
-| ファイル | 役割 |
-| --- | --- |
-| backend/schemas/__init__.py | スキーマ モジュール初期化 |
-| backend/schemas/auth.py | ログインリクエスト、JWT トークンレスポンス Pydantic スキーマ |
-| backend/schemas/user.py | ユーザーCRUD用リクエスト・レスポンス Pydantic スキーマ |
-| backend/schemas/task.py | タスク一覧取得用リスポンス Pydantic スキーマ |
-| backend/schemas/cli_adapter.py | CLIアダプタCRUD用リクエスト・レスポンス Pydantic スキーマ |
-| backend/schemas/settings.py | システム設定取得・更新用リクエスト・レスポンス Pydantic スキーマ |
+| 項目 | 設計 |
+|---|---|
+| 認証 | 既存JWT継続 |
+| 認可 | 既存ロール制御継続 |
+| Webhook検証 | Secretトークン検証を維持 |
+| 監査ログ | タスク失敗記録にTTY検知根拠を追加 |
+| 機密情報保護 | CLILogMaskerを継続適用 |
+| DinD権限 | --privileged前提で運用し、利用者を信頼境界内に限定 |
 
-✅ **04/24チェック完了**
+---
 
-#### Backend ルーター
+## 7. コード設計
 
-| ファイル | 役割 |
-| --- | --- |
-| backend/routers/__init__.py | ルーター モジュール初期化 |
-| backend/routers/auth.py | POST /api/auth/login ログインエンドポイント |
-| backend/routers/users.py | GET/POST/PUT/DELETE /api/users ユーザーAPI |
-| backend/routers/tasks.py | GET /api/tasks タスク一覧取得API |
-| backend/routers/cli_adapters.py | GET/POST/PUT/DELETE /api/cli-adapters CLIアダプタAPI |
-| backend/routers/settings.py | GET/PUT /api/settings システム設定API |
+### 7.1 変更後ディレクトリ設計（差分のみ）
 
-✅ **04/24チェック完了**
+| 配置 | 変更対象 |
+|---|---|
+| consumer | tty_wait_detector.py（新規）、ebpf_environment_checker.py（新規）、mr_processor.py（変更）、cli_container_manager.py（変更） |
+| producer | webhook_server.py（変更）、gitlab_event_handler.py（変更） |
+| backend/services | user_service.py（変更）、model_candidate_service.py（新規） |
+| backend/routers | users.py（変更） |
+| frontend/src/views | UserEditView.vue（変更） |
+| frontend/src/api | client.ts（変更） |
 
-#### Backend リポジトリ
+### 7.2 ファイル責務表（変更分）
 
-| ファイル | 役割 |
-| --- | --- |
-| backend/repositories/__init__.py | リポジトリ モジュール初期化 |
-| backend/repositories/user_repository.py | users テーブルのデータアクセス（取得・作成・更新・削除・重複チェック） |
-| backend/repositories/task_repository.py | tasks テーブルのデータアクセス（フィルタリング・ページネーション） |
-| backend/repositories/cli_adapter_repository.py | cli_adapters テーブルのデータアクセス（CRUD・参照チェック） |
-| backend/repositories/system_settings_repository.py | system_settings テーブルのデータアクセス（キーバリュー操作） |
+| ファイル | 役割 | 含まれる主要クラス |
+|---|---|---|
+| consumer/tty_wait_detector.py | Tracee監視管理 | TTYWaitDetector |
+| consumer/ebpf_environment_checker.py | eBPF前提条件判定 | EBPFEnvironmentChecker |
+| backend/services/model_candidate_service.py | 候補取得とキー検証 | ModelCandidateService |
 
-✅ **04/24チェック完了**
+### 7.3 共通化設計（重複排除）
 
-#### Backend サービス
+同一コード重複禁止のため、以下を共通化する。
 
-| ファイル | 役割 |
-| --- | --- |
-| backend/services/__init__.py | サービス モジュール初期化 |
-| backend/services/auth_service.py | JWT トークン発行・検証、パスワード認証（bcrypt ハッシュ）、ログイン処理 |
-| backend/services/user_service.py | ユーザーCRUD、Virtual Key 暗号化・復号、パスワードハッシュ化 |
-| backend/services/task_service.py | タスク一覧取得（admin は全体、一般ユーザーは自分のみ）、フィルタ処理 |
-| backend/services/cli_adapter_service.py | CLIアダプタCRUD、組み込みアダプタ保護、ユーザー参照チェック |
-| backend/services/system_settings_service.py | システム設定（プロンプトテンプレート・MCP設定）の取得・更新 |
-| backend/services/virtual_key_service.py | Virtual Key の AES-256-GCM 暗号化・復号化 |
+| 共通化対象 | 配置先 |
+|---|---|
+| eBPF可否判定 | consumer/ebpf_environment_checker.py |
+| TTY待機判定ロジック | consumer/tty_wait_detector.py |
+| LLMキー検証ロジック | backend/services/model_candidate_service.py |
+| Webhook重複判定 | producer/gitlab_event_handler.py 内専用メソッド |
 
-✅ **04/24チェック完了**
+### 7.4 コーディング規約（変更適用）
 
-#### Producer コンポーネント
+| 規約 | 適用内容 |
+|---|---|
+| Python | PEP8、型ヒント必須、副作用処理はサービス層へ集約 |
+| TypeScript/Vue | 画面ロジックは composable/store を優先、API呼び出しは client.ts 集約 |
+| ログ | 機密値マスクを必須適用 |
 
-| ファイル | 役割 |
-| --- | --- |
-| producer/producer.py | Producer エントリーポイント、WebhookServer と PollingLoop を asyncio.gather で並行起動 |
-| producer/webhook_server.py | aiohttp を使用した Webhook 受信サーバー、X-Gitlab-Token トークン検証 |
-| producer/polling_loop.py | POLLING_INTERVAL_SECONDS ごとに GitLab API を問い合わせ、Issue/MR 取得 |
-| producer/gitlab_event_handler.py | イベント解析、条件判定、タスク RabbitMQ 投入、重複チェック |
-| producer/pyproject.toml | Producer の依存パッケージ定義（aiohttp、python-gitlab、pika） |
-| producer/Dockerfile | Python 3.12 ベースイメージ、Producer コンテナ構築 |
-
-✅ **04/24チェック完了**
-
-#### Consumer コンポーネント
-
-| ファイル | 役割 |
-| --- | --- |
-| consumer/consumer.py | Consumer エントリーポイント・ConsumerWorker、RabbitMQ デキューとディスパッチ、グレースフルシャットダウン |
-| consumer/task_processor.py | タスク種別ディスパッチャー、task_type に応じて F-3/F-4 処理に振り分け |
-| consumer/issue_to_mr_converter.py | F-3 実装、Issue に対する CLI 実行、Draft MR 作成 |
-| consumer/mr_processor.py | F-4 実装、MR に対する CLI 実行、進捗報告、アサイニー監視 |
-| consumer/cli_container_manager.py | Docker API 経由の CLI コンテナ起動・停止、docker.sock マウント対応 |
-| consumer/cli_adapter_resolver.py | CLI 起動情報解決、環境変数・コマンドテンプレート組立 |
-| consumer/progress_manager.py | GitLab API 経由の進捗コメント追加 |
-| consumer/prompt_builder.py | F-3/F-4 プロンプト構築、ユーザーテンプレート・システムMCP設定反映 |
-| consumer/cli_log_masker.py | CLI ログ内の Virtual Key・GitLab PAT をマスク処理 |
-| consumer/virtual_key_service.py | Virtual Key の AES-256-GCM 復号化（consumer用） |
-| consumer/pyproject.toml | Consumer の依存パッケージ定義（pika、docker、python-gitlab） |
-| consumer/Dockerfile | Python 3.12 ベースイメージ、Consumer コンテナ構築、docker.sock マウント対応 |
-
-✅ **04/24チェック完了**
-
-#### Shared 共通モジュール
-
-| ファイル | 役割 |
-| --- | --- |
-| shared/config/config.py | pydantic-settings 環境変数設定管理（DATABASE_URL、GITLAB_API_URL 等） |
-| shared/database/database.py | SQLAlchemy Engine・Session・Base 管理、DB 接続実装 |
-| shared/gitlab_client/gitlab_client.py | GitLab REST API ラッパー、エラーハンドリング、リトライ実装 |
-| shared/messaging/rabbitmq_client.py | RabbitMQ 接続・publish/consume 実装、リトライ対応 |
-| shared/models/db.py | SQLAlchemy ORM モデル定義（User、Task、CLIAdapter、SystemSetting） |
-| shared/models/gitlab.py | GitLab REST API レスポンス用 Pydantic スキーマ |
-| shared/models/task.py | RabbitMQ タスクメッセージ用 Pydantic スキーマ |
-| shared/pyproject.toml | Shared の依存パッケージ定義（SQLAlchemy、pydantic、python-gitlab、pika） |
-
-✅ **04/24チェック完了**
-
-#### Frontend フロントエンド
-
-| ファイル | 役割 |
-| --- | --- |
-| frontend/src/main.ts | Vue app インスタンス作成、Pinia・router・vuetify プラグイン登録 |
-| frontend/src/App.vue | ルートコンポーネント、ナビゲーションレイアウト |
-| frontend/src/router/index.ts | Vue Router ルート定義、認証ガード（未認証リダイレクト、権限チェック） |
-| frontend/src/api/client.ts | axios インスタンス設定、API 関数（login、getUsers、getTasks、createUser等） |
-| frontend/src/stores/auth.ts | Pinia 認証ストア、ユーザー情報・トークン管理 |
-| frontend/src/plugins/vuetify.ts | Vuetify テーマ・コンポーネント設定 |
-| frontend/src/views/LoginView.vue | ログイン画面コンポーネント |
-| frontend/src/views/TaskListView.vue | タスク一覧画面、フィルタ・ページネーション |
-| frontend/src/views/UserListView.vue | ユーザー一覧画面、削除機能 |
-| frontend/src/views/UserCreateView.vue | ユーザー作成画面 |
-| frontend/src/views/UserEditView.vue | ユーザー編集画面（admin・本人のみ） |
-| frontend/src/views/UserDetailView.vue | ユーザー詳細表示画面 |
-| frontend/src/views/SettingsView.vue | システム設定画面（プロンプトテンプレート・CLIアダプタ設定） |
-| frontend/Dockerfile | Node.js ベースイメージ、Vue ビルド、nginx 配信用コンテナ構築 |
-| frontend/nginx.conf | nginx 設定ファイル、Vue SPA サポート、/api 逆プロキシ設定 |
-| frontend/index.html | HTML エントリーポイント |
-| frontend/vite.config.ts | Vite ビルド設定 |
-| frontend/tsconfig.json | TypeScript 設定ファイル |
-| frontend/tsconfig.node.json | TypeScript Node.js 設定 |
-| frontend/package.json | フロントエンド依存パッケージ定義（Vue、Vuetify、Pinia、axios） |
-
-✅ **04/24チェック完了**
-
-#### E2E テスト
-
-| ファイル | 役割 |
-| --- | --- |
-| e2e/global-setup.ts | Playwright グローバルセットアップ、テスト実行前の GitLab・RabbitMQ クリーンアップ |
-| e2e/playwright.config.ts | Playwright 実行設定（baseURL、workers=1、タイムアウト） |
-| e2e/tests/auth.spec.ts | 認証・認可テスト（ログイン、権限制御、ログアウト） |
-| e2e/tests/users.spec.ts | ユーザー管理テスト（作成・編集・削除・重複エラー） |
-| e2e/tests/tasks.spec.ts | タスク画面テスト（表示・フィルタ・ナビゲーション） |
-| e2e/tests/gitlab_integration.spec.ts | GitLab 連携テスト（Webhook・ポーリング・MR処理・進捗更新） |
-| e2e/package.json | E2E テスト依存パッケージ定義（@playwright/test） |
-
-✅ **04/24チェック完了**
-
-#### セットアップ・スクリプト
-
-| ファイル | 役割 |
-| --- | --- |
-| scripts/setup.py | システム初期化スクリプト、管理者ユーザー作成・プロンプトテンプレート DB 投入 |
-| scripts/setup.sh | setup.py 実行ラッパーシェルスクリプト |
-| scripts/test_setup.py | テスト環境セットアップ、GitLab テストユーザー・プロジェクト・Webhook 設定 |
-| scripts/test_setup.sh | test_setup.py 実行ラッパーシェルスクリプト |
-| scripts/gitlab_setup.py | GitLab CE セットアップスクリプト、グループ・プロジェクト・ユーザー初期化 |
-
-✅ **04/24チェック完了**
-
-#### CLI 実行環境・モックサービス
-
-| ファイル | 役割 |
-| --- | --- |
-| cli-exec/claude/Dockerfile | Claude CLI イメージビルド用 Dockerfile |
-| cli-exec/opencode/Dockerfile | OpenCode CLI イメージビルド用 Dockerfile |
-| mock-llm/server.py | モック LLM HTTP サーバー実装、Claude API 互換レスポンス |
-| mock-llm/Dockerfile | Python モック LLM コンテナ構築 |
-
-✅ **04/24チェック完了**
-
-#### LiteLLM 設定
-
-| ファイル | 役割 |
-| --- | --- |
-| litellm/config.yml | LiteLLM プロキシ設定（モック LLM バックエンド） |
-| litellm/config-real.yml | LiteLLM プロキシ設定（実 LLM バックエンド、test-real プロファイル用） |
-
-✅ **04/24チェック完了**
+---
 
 ## 8. テスト設計
 
-### 8.1 現在リポジトリに存在するテスト
+### 8.1 テスト種類
 
-| 種別 | 配置 | 内容 |
-| --- | --- | --- |
-| E2E | e2e/tests/auth.spec.ts | ログイン、認可、ログアウト |
-| E2E | e2e/tests/users.spec.ts | ユーザー作成、編集、削除、重複エラー |
-| E2E | e2e/tests/tasks.spec.ts | タスク画面表示、フィルタ、ナビゲーション |
-| E2E | e2e/tests/gitlab_integration.spec.ts | Webhook、ポーリング、MR処理、進捗更新、重複防止 |
+| 種類 | 目的 | 対象 |
+|---|---|---|
+| 単体テスト | 判定ロジックの正確性 | eBPF判定、TTY検知、キー検証、重複判定 |
+| 結合テスト | サービス間連携検証 | producer-consumer、consumer-gitlab、backend-frontend |
+| 総合テスト | 要件達成確認 | F-5系、WB系、C系 |
+| E2Eテスト | ユーザー視点GUI/運用確認 | 設定画面、タスク履歴、GitLab連携 |
 
-### 8.2 E2E実行方式
+### 8.2 実装すべきテストケース（要件対応）
 
-- Playwright は docker compose 上の test_playwright または test_playwright_real で実行する
-- ベースURLは frontend サービス名を使う
-- GitLab 統合テストは GitLab CE と LiteLLM 系サービスを含むプロファイル起動が前提である
-- Playwright は workers を 1 に固定し、Consumer の単一処理前提に合わせる
+| テストID | 種類 | 対応要件 | 検証内容 |
+|---|---|---|---|
+| UT-TTY-01 | 単体 | F-5.1 | BTF不足で無効化 |
+| UT-TTY-02 | 単体 | F-5.3 | tty_read_wait判定 |
+| UT-TTY-03 | 単体 | F-5.4 | 検知時強制終了呼び出し |
+| IT-TTY-01 | 結合 | F-5.5/F-5.6 | failedコメント + tasks更新 |
+| IT-WB-01 | 結合 | WB-1 | Group Webhook受信 |
+| IT-WB-02 | 結合 | WB-3 | Idempotency-Key重複抑止 |
+| UT-LLM-01 | 単体 | C-1 | 無効キー保存拒否 |
+| IT-LLM-01 | 結合 | C-3/C-4 | 候補取得失敗時手入力継続 |
+| E2E-C-01 | E2E | C-1〜C-4 | ユーザー設定画面操作 |
+| E2E-TTY-01 | E2E | TS-5.6 | TTY待機検知でfailed |
+| E2E-WB-01 | E2E | TS-WB-1 | Group Webhook経由処理 |
 
-### 8.3 テスト設計上の現状
+### 8.3 正常/異常網羅
 
-- リポジトリには Python 側の単体テストおよび結合テストは配置されていない
-- 現在の自動検証の中心は Playwright E2E である
-- GitLab 統合テストはタスク状態を backend API から取得して補助判定する
+- 正常: 検知有効で通常完了、Group Webhook通常処理、LLM設定正常保存
+- 異常: eBPF無効、TTY待機検知、署名不正、重複受信、キー不正、候補取得失敗
+
+---
 
 ## 9. 運用設計
 
-### 9.1 起動プロファイル
+### 9.1 起動・運用
 
-| プロファイル | 用途 |
-| --- | --- |
-| 通常起動 | frontend、backend、producer、consumer、postgresql、rabbitmq を起動する |
-| test | GitLab CE、mock_llm、litellm、test_playwright を追加する |
-| test-real | GitLab CE、litellm_real、test_playwright_real を追加する |
-| build-only | cli-exec 向けイメージだけをビルドする |
+| 項目 | 設計 |
+|---|---|
+| 起動方式 | docker compose を継続 |
+| 初期化 | backend起動時マイグレーション継続 |
+| consumer前提 | DinD実行条件を満たすイメージ/権限で起動 |
+| README反映 | 起動手順、TTY検知前提、Group Webhook設定手順を記載する |
 
-### 9.2 初期化とセットアップ
+### 9.2 運用ルール
 
-- backend は起動時に Alembic の head まで自動適用する
-- scripts/setup.sh と scripts/setup.py は通常環境の初期設定を担当する
-- scripts/test_setup.sh と scripts/test_setup.py は GitLab テスト環境とテストユーザー準備を担当する
-- README.md に起動方法、環境変数、E2Eテスト実行方法を記載する
+| ルール | 内容 |
+|---|---|
+| Group Webhook | 対象グループにOwner権限で設定管理 |
+| 再送方針 | 受信失敗時はGitLab再送を利用 |
+| TTY検知運用 | eBPF不可時は無効化継続しWARNING監視 |
 
-## 10. ログ・セキュリティ・監視
+---
 
-### 10.1 セキュリティ設計
+## 10. ログ・監視・アラート設計
 
-| 項目 | 内容 |
-| --- | --- |
-| Virtual Key保存 | AES-256-GCM で暗号化して users.virtual_key_encrypted に保存する |
-| パスワード保存 | bcrypt ハッシュで保存する |
-| API認証 | JWT Bearer 認証を使用する |
-| API認可 | admin 権限判定と本人判定を使い分ける |
-| Webhook検証 | X-Gitlab-Token と設定値を直接比較する |
-| CLIログ保護 | CLILogMasker で PAT 等をマスクして保存する |
-| CLI秘密情報 | Virtual Key と GitLab PAT は実行時のみ使用し、コンテナ破棄で消去する |
+### 10.1 ログ設計
 
-### 10.2 ログ設計
+| ログ種別 | 必須 | 出力先 | 内容 |
+|---|---|---|---|
+| TTY検知ログ | 必須 | consumerログ + tasks.cli_log | 検知時刻、根拠イベント |
+| eBPF初期化ログ | 必須 | consumerログ | BTF/CAP判定結果 |
+| Webhook受信ログ | 必須 | producerログ | 受信成功/失敗、重複判定結果 |
+| LLM設定検証ログ | 必須 | backendログ | 検証失敗理由、候補取得失敗 |
 
-| ログ対象 | 出力先 | 説明 |
-| --- | --- | --- |
-| アプリケーションログ | 各コンテナ標準出力 | producer、consumer、backend の動作ログ |
-| CLI実行ログ | tasks.cli_log | Issue/MR 処理時のCLI出力 |
-| エラー情報 | tasks.error_message および標準出力 | タスク失敗理由 |
+### 10.2 監視・アラート設計
 
-### 10.2.1 監査ログ
+監視・アラートの専用基盤追加は必須ではないため、既存監視を継続し、以下の運用監視項目のみ追加する。
 
-認証・認可に紐づく専用の監査ログは、現行実装には存在しない。ユーザー更新や設定更新の履歴保持は未実装であり、必要になった場合は別途追加実装が必要である。
+| 監視項目 | 方法 | 対応 |
+|---|---|---|
+| TTY検知失敗発生頻度 | ログ集計 | 多発時にテンプレート/入力要件を見直し |
+| Webhook 403率 | producerログ監視 | Secret設定を確認 |
+| LLM検証失敗率 | backendログ監視 | ユーザー入力案内を改善 |
 
-### 10.3 監視設計
+### 10.3 障害対応
 
-| 対象 | 方法 | 備考 |
-| --- | --- | --- |
-| backend | /health | FastAPI 健康確認 |
-| producer | /health | WebhookServer 健康確認 |
-| 各コンテナ | restart: always | compose の自動再起動に依存 |
-| postgresql | healthcheck | pg_isready を使用 |
-| rabbitmq | コンテナ死活監視 | 管理UIの疎通確認は別運用 |
+| 障害 | 一次対応 |
+|---|---|
+| eBPF起動不可 | 無効化継続を確認し、DinD権限/BTFを点検 |
+| Webhook受信失敗 | GitLab再送実施、署名設定点検 |
+| LLM検証失敗多発 | キー発行元・有効期限・入力形式を点検 |
 
-専用のアラート基盤や永続監視基盤は、このリポジトリ内には実装されていない。
+---
 
-## 11. E2Eシナリオ対応表
+## 11. E2Eテスト設計
 
-### 11.1 現在実装に対応するシナリオ
+### 11.1 実装必須ルール（省略不可）
 
-| シナリオID | 対応テスト | 検証内容 |
-| --- | --- | --- |
-| TS-01 | e2e/tests/auth.spec.ts | ログイン、未認証時遷移、権限制御によるリダイレクト |
-| TS-02 | e2e/tests/users.spec.ts | ユーザー作成・編集・削除、重複時エラー |
-| TS-03 | e2e/tests/tasks.spec.ts | タスク一覧表示、フィルタ、画面遷移 |
-| TS-04 | e2e/tests/gitlab_integration.spec.ts | Webhook/ポーリング検出、MR処理、進捗更新、重複防止 |
-| TS-5.1〜TS-5.10 | e2e/tests/tty_detection.spec.ts | TTY待機検知、eBPF環境判定、git config設定、タスク失敗報告 |
-| TS-A-1〜TS-A-6 | e2e/tests/prompt_templates.spec.ts | プロンプトテンプレート必須指示反映 |
-| TS-WB-1〜TS-WB-5 | e2e/tests/group_webhook.spec.ts | Group Webhook受信、Idempotency-Key重複抑止、WARNINGログ |
-| TS-C-1〜TS-C-4 | e2e/tests/llm_settings.spec.ts | LLMキー保存時バリデーション、モデルサジェスト表示 |
+- E2Eテストは本章に定義する全パターン（TS-5.1〜TS-5.10、TS-A-1〜TS-A-6、TS-WB-1〜TS-WB-5、TS-C-1〜TS-C-4）を絶対に実装する。
+- 一部のみ実装、代表ケースのみ実装、手動確認での代替は認めない。
+- 全パターンを自動実行し、全件成功するまで修正と再実行を繰り返す。
 
-### 11.2 運用上の補足
+### 11.2 Playwright実行前提
 
-- Playwright 実行は docker compose の `test` または `test-real` プロファイルを使用する
-- 現在の自動検証は E2E が中心であり、Python 単体テスト・結合テストは不要とする
+- e2e ディレクトリにテストコードを配置する。
+- docker compose の test profile で test_playwright を起動する。
+- test_playwright はテストコードをマウントし、変更を即時反映する。
+- 実行は test_playwright サービス内で実施する。
+- コンテナ内実行のため baseURL は frontend サービス名を使用する。
+
+### 11.3 E2Eシナリオ詳細（TTY入力待機検知）
+
+| シナリオID | テスト目的 | 前提条件 | テスト手順 | 期待される結果 |
+|---|---|---|---|---|
+| TS-5.1 | eBPF環境判定: BTF存在確認 | DinD環境（正常） | タスク起動後にeBPF初期化チェックを実行する | BTF存在を確認し、Tracee起動へ進む |
+| TS-5.2 | eBPF環境判定: 権限確認 | DinD環境（正常） | タスク起動後にCAP_BPF/CAP_PERFMON確認を行う | 権限確認成功でTracee起動へ進む |
+| TS-5.3 | eBPF初期化失敗: BTF不足 | DinD環境（BTF不足を再現） | タスク起動後にBTF存在チェックを行う | BTF不足を検知し、TTY検知無効で継続しWARNING記録 |
+| TS-5.4 | eBPF初期化失敗: 権限不足 | DinD環境（CAP不足を再現） | タスク起動後に権限確認を行う | 権限不足を検知し、TTY検知無効で継続しWARNING記録 |
+| TS-5.5 | eBPF初期化タイムアウト | DinD環境（判定遅延を再現） | タスク起動後、判定を5秒超にする | 5秒経過でTTY検知無効化し、処理継続とWARNING記録 |
+| TS-5.6 | TTY待機検知の正常検知 | DinD環境、CLIで入力待機を発生 | タスク起動後、CLIを入力待機状態にする | TraceeがTTY read待機を検知しCLI強制終了、Issue/MRに失敗コメント投稿 |
+| TS-5.7 | 失敗報告本文の識別子確認 | TS-5.6成立後 | 投稿された失敗コメントを確認する | Task ID と MR/Issue番号が本文に併記される |
+| TS-5.8 | タスク履歴ログ記録確認 | TS-5.6成立後 | tasks.error_message と tasks.cli_log を確認する | 検知種別と詳細文、判定根拠が保存される |
+| TS-5.9 | git config自動設定 | DinD環境、任意タスク実行 | CLIコンテナ起動直後にgit config値を確認する | user.name=GITLAB_BOT_NAME、user.email=GITLAB_BOT_NAME@localhost |
+| TS-5.10 | git config設定失敗時の通知 | git config失敗再現環境 | CLIコンテナ起動後にgit config失敗を発生させる | 既存エラー報告フローでIssue/MRへ通知される |
+
+### 11.4 E2Eシナリオ詳細（プロンプトテンプレート）
+
+| シナリオID | テスト目的 | 前提条件 | テスト手順 | 期待される結果 |
+|---|---|---|---|---|
+| TS-A-1 | git_clone_path展開確認 | F-4処理タスクが存在 | プロンプト生成結果を確認する | {git_clone_path} が実パスへ展開される |
+| TS-A-2 | 問い合わせ禁止指示反映確認 | デフォルトF-4テンプレート設定済み | 生成プロンプト本文を確認する | 問い合わせ禁止の固定指示が含まれる |
+| TS-A-3 | ユーザー個別上書き運用確認 | 個別テンプレート設定済み | F-4実行前プロンプトを確認する | 必須指示を維持した上で個別上書きが適用される |
+| TS-A-4 | TTY待機時failed方針確認 | TTY待機再現可能 | タスクを実行し待機検知を発火させる | 自動入力せず failed 終了する |
+| TS-A-5 | F-3テンプレート記載例反映確認 | F-3テンプレート設定済み | テンプレート本文を確認する | Issue起点生成と問い合わせ禁止の記載が含まれる |
+| TS-A-6 | F-4テンプレート記載例反映確認 | F-4テンプレート設定済み | テンプレート本文を確認する | git_clone_path、問い合わせ禁止、TTY待機時failedが含まれる |
+
+### 11.5 E2Eシナリオ詳細（Group Webhook運用）
+
+| シナリオID | テスト目的 | 前提条件 | テスト手順 | 期待される結果 |
+|---|---|---|---|---|
+| TS-WB-1 | Group Webhook受信確認 | Group Webhook設定済み | グループ配下プロジェクトでIssue更新を発生させる | 受信APIがイベント受信し対象を特定する |
+| TS-WB-2 | 複数プロジェクト一元受信確認 | グループ配下に複数プロジェクト | 複数プロジェクトでIssue/MR更新を発生させる | 単一Group Webhookで全イベントを受信する |
+| TS-WB-3 | 非同期処理分離確認 | 通常イベント送信可能 | 受信APIへイベント送信し応答時間を測定する | 受信APIは短時間で2xxを返却する |
+| TS-WB-4 | 重複受信抑止確認 | 同一イベント再送を再現可能 | 同一Idempotency-Keyイベントを複数回送信する | 重複イベントが再処理されない |
+| TS-WB-5 | 受信失敗時記録確認 | 受信失敗再現可能 | 受信失敗ケースを発生させる | WARNINGログを記録し、再送はGitLab側へ委譲する |
+
+### 11.6 E2Eシナリオ詳細（LLMキー・モデル設定）
+
+| シナリオID | テスト目的 | 前提条件 | テスト手順 | 期待される結果 |
+|---|---|---|---|---|
+| TS-C-1 | キー正常値保存確認 | 有効なLLMキーを入力可能 | 設定保存を実行する | バリデーション成功で保存される |
+| TS-C-2 | キー異常値保存拒否確認 | 無効なLLMキーを入力 | 設定保存を実行する | GUIエラー表示され保存されない |
+| TS-C-3 | モデルサジェスト表示確認 | モデル一覧API利用可能 | 設定画面でモデルフィールド入力を開始する | 単一モデルフィールドにサジェストが表示される |
+| TS-C-4 | 候補取得失敗時継続確認 | モデル一覧API失敗を再現 | 設定画面でモデル入力して保存する | サジェスト非表示でも同一フィールドで保存継続できる |
+
+### 11.7 実行・完了基準
+
+| 判定 | 基準 |
+|---|---|
+| E2E完了 | 本章の全シナリオIDを自動テストとして実装済みで、全件成功 |
+| リグレッション | 既存主要シナリオ（auth/users/tasks/gitlab連携）に失敗がない |
+| 実装完了判定 | シナリオID単位の未実装・未実行・暫定skipが0件 |
+
+---
+

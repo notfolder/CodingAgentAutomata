@@ -9,7 +9,7 @@ docker compose --profile test で起動した GitLab CE を含む全環境のセ
   2. GitLab root PAT の自動取得（GITLAB_ADMIN_TOKEN 未設定の場合は docker exec 経由で取得）
   3. bot ユーザー作成・PAT 発行
   4. テスト用プロジェクト作成・メンバー追加・ラベル設定
-  5. Webhook 設定
+    5. Group Webhook 設定
   6. テストユーザー作成（GitLab）
   7. LiteLLM Proxy でテスト用 Virtual Key 発行（LITELLM_MASTER_KEY 設定時のみ）
   8. mock LLM で Virtual Key 発行（LITELLM_MASTER_KEY 未設定時のフォールバック）
@@ -397,20 +397,43 @@ def allow_local_requests(root_token: str) -> None:
         logger.warning("ローカル Webhook 許可設定失敗 (%d): %s", resp.status_code, resp.text[:200])
 
 
-def setup_webhook(root_token: str, project_id: str) -> None:
-    """プロジェクトに Webhook を設定する"""
-    resp = _gitlab_api("POST", f"/projects/{project_id}/hooks", root_token, json={
+def setup_group_webhook(root_token: str, group_id: str) -> None:
+    """グループに Webhook を設定する（既存URLがあれば更新）"""
+    payload = {
         "url": WEBHOOK_URL,
         "token": GITLAB_WEBHOOK_SECRET,
         "issues_events": True,
         "merge_requests_events": True,
         "push_events": False,
         "enable_ssl_verification": False,
-    })
+    }
+
+    list_resp = _gitlab_api("GET", f"/groups/{group_id}/hooks", root_token)
+    if list_resp.status_code != 200:
+        logger.warning(
+            "Group Webhook 一覧取得失敗 (%d): %s",
+            list_resp.status_code,
+            list_resp.text[:200],
+        )
+        return
+
+    existing_hooks = list_resp.json() if isinstance(list_resp.json(), list) else []
+    target_hook = next((h for h in existing_hooks if h.get("url") == WEBHOOK_URL), None)
+
+    if target_hook:
+        hook_id = target_hook.get("id")
+        resp = _gitlab_api("PUT", f"/groups/{group_id}/hooks/{hook_id}", root_token, json=payload)
+        if resp.status_code == 200:
+            logger.info("Group Webhook を更新しました: %s (group_id=%s)", WEBHOOK_URL, group_id)
+        else:
+            logger.warning("Group Webhook 更新失敗 (%d): %s", resp.status_code, resp.text[:200])
+        return
+
+    resp = _gitlab_api("POST", f"/groups/{group_id}/hooks", root_token, json=payload)
     if resp.status_code == 201:
-        logger.info("Webhook を設定しました: %s", WEBHOOK_URL)
+        logger.info("Group Webhook を設定しました: %s (group_id=%s)", WEBHOOK_URL, group_id)
     else:
-        logger.warning("Webhook 設定失敗 (%d): %s", resp.status_code, resp.text[:200])
+        logger.warning("Group Webhook 設定失敗 (%d): %s", resp.status_code, resp.text[:200])
 
 
 def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
@@ -638,6 +661,11 @@ def main() -> None:
         if not bot_pat:
             logger.warning("bot PAT が取得できませんでした")
 
+        # --- テスト用グループ ---
+        group_id = setup_test_group(root_token)
+        if not group_id:
+            logger.warning("テスト用グループの作成に失敗しました")
+
         # --- テスト用プロジェクト ---
         project_id = setup_test_project(root_token, bot_user_id)
         if not project_id:
@@ -645,8 +673,9 @@ def main() -> None:
         else:
             # --- ローカル Webhook リクエストを許可 ---
             allow_local_requests(root_token)
-            # --- Webhook 設定 ---
-            setup_webhook(root_token, project_id)
+            # --- Group Webhook 設定 ---
+            if group_id:
+                setup_group_webhook(root_token, group_id)
 
         # --- GitLab テストユーザー作成 ---
         user_pats = setup_gitlab_test_users(root_token, project_id)

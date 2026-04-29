@@ -246,6 +246,38 @@ class GitLabClient:
         result = self._call_with_retry(_call)
         return result if result is not None else []
 
+    def list_assigned_issues_all_projects(
+        self,
+        assignee_username: str,
+        labels: Optional[list[str]] = None,
+        state: str = "opened",
+    ) -> list[dict]:
+        """
+        全プロジェクト横断で、指定ユーザーにアサインされた Issue 一覧を取得する。
+
+        Args:
+            assignee_username: アサイニーのユーザー名
+            labels: フィルタするラベルのリスト（省略可）
+            state: Issueのステータス（"opened" / "closed" / "all"）
+
+        Returns:
+            Issue属性辞書のリスト
+        """
+
+        def _call():
+            kwargs: dict = {
+                "state": state,
+                "scope": "all",
+                "assignee_username": assignee_username,
+            }
+            if labels:
+                kwargs["labels"] = labels
+            issues = self._list_all_pages(self._gl.issues, **kwargs)
+            return [i.attributes for i in issues]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
+
     def get_issue_notes(self, project_id: int, iid: int) -> list[dict]:
         """
         Issue の全コメント（Note）一覧を取得する。
@@ -297,6 +329,38 @@ class GitLabClient:
             if labels:
                 kwargs["labels"] = labels
             mrs = self._list_all_pages(project.mergerequests, **kwargs)
+            return [mr.attributes for mr in mrs]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
+
+    def list_assigned_merge_requests_all_projects(
+        self,
+        assignee_username: str,
+        labels: Optional[list[str]] = None,
+        state: str = "opened",
+    ) -> list[dict]:
+        """
+        全プロジェクト横断で、指定ユーザーにアサインされた MR 一覧を取得する。
+
+        Args:
+            assignee_username: アサイニーのユーザー名
+            labels: フィルタするラベルのリスト（省略可）
+            state: MRのステータス（"opened" / "closed" / "merged" / "all"）
+
+        Returns:
+            MR属性辞書のリスト
+        """
+
+        def _call():
+            kwargs: dict = {
+                "state": state,
+                "scope": "all",
+                "assignee_username": assignee_username,
+            }
+            if labels:
+                kwargs["labels"] = labels
+            mrs = self._list_all_pages(self._gl.mergerequests, **kwargs)
             return [mr.attributes for mr in mrs]
 
         result = self._call_with_retry(_call)
