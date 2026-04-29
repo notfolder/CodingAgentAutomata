@@ -79,7 +79,7 @@ echo "テスト環境セットアップを開始します..."
 echo ""
 echo "[ステップ 1] CLI イメージ（claude / opencode）をビルドします..."
 # CLI イメージのビルドに失敗してもe2eテスト自体は継続可能なためエラーを無視する
-docker compose --profile build-only build 2>&1 || {
+./scripts/build_cli_exec.sh 2>&1 || {
     echo "  警告: CLI イメージのビルドに失敗しました（e2eテストには不要のため続行します）"
 }
 

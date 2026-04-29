@@ -59,7 +59,7 @@ GitLab CE・LiteLLM Proxy を含む全コンポーネントが起動します。
 ### cli-exec コンテナイメージのビルド
 
 ```bash
-docker compose --profile build-only build
+./scripts/build_cli_exec.sh
 ```
 
 Claude Code 用・opencode 用の cli-exec コンテナイメージをビルドします。
