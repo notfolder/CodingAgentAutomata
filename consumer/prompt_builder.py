@@ -144,12 +144,40 @@ class PromptBuilder:
             template = system_template
             logger.debug("PromptBuilder.build_f4_prompt: システムデフォルトテンプレートを使用")
 
+        original_template: str = template
+
         # テンプレート変数を展開
         prompt: str = template
         prompt = prompt.replace("{mr_description}", mr_description)
         prompt = prompt.replace("{mr_comments}", mr_comments)
         prompt = prompt.replace("{branch_name}", branch_name)
         prompt = prompt.replace("{repository_url}", repository_url)
+
+        # 旧テンプレートや不完全なテンプレートでも実行内容が空にならないよう、
+        # 必須コンテキストが未記載なら末尾に補完する。
+        fallback_sections: list[str] = []
+        if "{branch_name}" not in original_template:
+            fallback_sections.append(f"## 対象ブランチ\n\n{branch_name}")
+        if "{repository_url}" not in original_template:
+            fallback_sections.append(f"## リポジトリURL\n\n{repository_url}")
+        if "{mr_description}" not in original_template:
+            fallback_sections.append(
+                "## 作業指示（MR Description）\n\n"
+                f"{mr_description or '記載なし'}"
+            )
+        if "{mr_comments}" not in original_template:
+            fallback_sections.append(
+                "## コンテキスト（MRコメント一覧）\n\n"
+                f"{mr_comments or 'コメントなし'}"
+            )
+
+        if fallback_sections:
+            prompt = (
+                f"{prompt.rstrip()}\n\n"
+                "---\n\n"
+                "以下は実行に必要な補足コンテキストです。必ず参照してください。\n\n"
+                + "\n\n".join(fallback_sections)
+            )
 
         logger.debug("PromptBuilder.build_f4_prompt: branch_name='%s'", branch_name)
         return prompt

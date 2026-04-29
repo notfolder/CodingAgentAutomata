@@ -19,6 +19,13 @@ from shared.models.db import Task, User
 logger = logging.getLogger(__name__)
 
 
+_NO_OP_PHRASES = [
+    "i don't have a specific task to work on",
+    "could you let me know what you'd like help with",
+    "just describe what you need and i'll get started",
+]
+
+
 class MRProcessor:
     """F-4 処理: MR 処理を実行するクラス。"""
 
@@ -221,6 +228,51 @@ class MRProcessor:
             if key in ("cli", "model"):
                 override[key] = value
         return override
+
+    def _is_no_op_completion(
+        self,
+        container_id: str,
+        initial_head_sha: str,
+        cli_log_lines: list[str],
+    ) -> tuple[bool, str]:
+        """
+        CLI が正常終了しても実作業をしていないケースを検出する。
+
+        判定条件:
+        - 開始時 HEAD と終了時 HEAD が同一
+        - 作業ツリーに未コミット変更がない
+        - 代表的な「具体的なタスクがない」応答がログに含まれる場合は理由を明示
+        """
+        current_head_exit, current_head_out = self._cli_container_manager.exec_command(
+            container_id,
+            "cd /workspace && git rev-parse HEAD",
+        )
+        if current_head_exit != 0:
+            raise ValueError(f"終了時の HEAD 取得に失敗しました: {current_head_out}")
+        current_head_sha = current_head_out.strip()
+
+        status_exit, status_out = self._cli_container_manager.exec_command(
+            container_id,
+            "cd /workspace && git status --porcelain",
+        )
+        if status_exit != 0:
+            raise ValueError(f"git status の取得に失敗しました: {status_out}")
+
+        cli_log_text = "\n".join(cli_log_lines).lower()
+        matched_no_op_phrase = next(
+            (phrase for phrase in _NO_OP_PHRASES if phrase in cli_log_text),
+            None,
+        )
+
+        if current_head_sha == initial_head_sha and status_out.strip() == "":
+            if matched_no_op_phrase:
+                return True, (
+                    "CLI は正常終了しましたが、具体的な作業内容を解釈できない旨の応答のみで終了し、"
+                    "コミットや変更がありませんでした。"
+                )
+            return True, "CLI は正常終了しましたが、コミットや変更がありませんでした。"
+
+        return False, ""
 
     async def _monitor_assignees(self, project_id: int, mr_iid: int) -> bool:
         """
@@ -455,6 +507,16 @@ class MRProcessor:
                 raise ValueError(
                     f"git checkout 失敗（exit={checkout_exit}）: {checkout_out}"
                 )
+
+            initial_head_exit, initial_head_out = self._cli_container_manager.exec_command(
+                container_id,
+                "cd /workspace && git rev-parse HEAD",
+            )
+            if initial_head_exit != 0:
+                raise ValueError(
+                    f"初期 HEAD 取得に失敗しました（exit={initial_head_exit}）: {initial_head_out}"
+                )
+            initial_head_sha = initial_head_out.strip()
             logger.info("MRProcessor: git clone + checkout 完了 branch=%s", branch_name)
 
             # ==========================================
@@ -650,6 +712,14 @@ class MRProcessor:
             exit_code: int = cli_exit_code_holder[0]
             if exit_code != 0:
                 raise RuntimeError(f"CLI が非ゼロ終了コードで終了しました: exit_code={exit_code}")
+
+            no_op_detected, no_op_reason = self._is_no_op_completion(
+                container_id,
+                initial_head_sha,
+                cli_log_lines,
+            )
+            if no_op_detected:
+                raise RuntimeError(no_op_reason)
 
             # 最終進捗を flush
             await progress_manager.flush()

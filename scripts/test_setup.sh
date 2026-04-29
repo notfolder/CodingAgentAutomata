@@ -188,6 +188,36 @@ if [ "${SETUP_SUCCESS}" = "false" ]; then
     exit 1
 fi
 
+echo "  setup.py による必須システム設定（F-3/F-4）を確認します..."
+DB_USER="${POSTGRES_USER:-user}"
+DB_NAME="${POSTGRES_DB:-db}"
+
+TEMPLATE_VALID_COUNT=$(docker compose exec -T postgresql psql -U "${DB_USER}" -d "${DB_NAME}" -At -c "
+SELECT COUNT(*)
+    FROM system_settings
+ WHERE key IN ('f3_prompt_template', 'f4_prompt_template')
+     AND value IS NOT NULL
+     AND value <> '';
+")
+
+if [ "${TEMPLATE_VALID_COUNT}" != "2" ]; then
+        echo "エラー: 必須テンプレート設定が不足しています（f3/f4）" >&2
+        echo "  現在値を表示します:" >&2
+        docker compose exec -T postgresql psql -U "${DB_USER}" -d "${DB_NAME}" -P pager=off -c "
+SELECT key,
+             CASE
+                 WHEN value IS NULL THEN '<NULL>'
+                 WHEN value = '' THEN '<EMPTY>'
+                 ELSE '<SET>'
+             END AS value_state
+    FROM system_settings
+ WHERE key IN ('f3_prompt_template', 'f4_prompt_template')
+ ORDER BY key;
+" >&2
+        exit 1
+fi
+echo "  必須システム設定 f3/f4 を確認しました"
+
 # 管理者ログイン確認
 echo "  管理者ログインを確認します..."
 ADMIN_LOGIN_OK=false
