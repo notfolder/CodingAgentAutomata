@@ -181,6 +181,10 @@ class CLIContainerManager:
         # コンテナを作成（この時点でコンテナIDを確保する）
         # create() + start() に分離することで、start() が ReadTimeout 等で失敗しても
         # container オブジェクトを保持し、確実に削除できるようにする
+        logger.info(
+            "CLIContainerManager.start_container: containers.create() 開始 name=%s",
+            container_name,
+        )
         container: docker.models.containers.Container = self._client.containers.create(
             image=image,
             name=container_name,
@@ -191,12 +195,16 @@ class CLIContainerManager:
             # Consumer コンテナと同一ネットワークに接続（mock_llm/litellm へのサービス名解決のため）
             network=self._cli_network if self._cli_network else None,
         )
-        logger.debug(
-            "CLIContainerManager.start_container: コンテナ作成完了 container_id=%s",
+        logger.info(
+            "CLIContainerManager.start_container: containers.create() 完了 container_id=%s",
             container.id,
         )
 
         # コンテナを起動（失敗時は作成済みコンテナを削除してから再送出）
+        logger.info(
+            "CLIContainerManager.start_container: container.start() 開始 container_id=%s",
+            container.id,
+        )
         try:
             container.start()
         except Exception as exc:
@@ -218,6 +226,10 @@ class CLIContainerManager:
                 )
             raise
 
+        logger.info(
+            "CLIContainerManager.start_container: container.start() 完了 container_id=%s",
+            container.id,
+        )
         logger.info(
             "CLIContainerManager.start_container: container_id=%s", container.id
         )

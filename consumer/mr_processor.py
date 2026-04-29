@@ -582,6 +582,8 @@ class MRProcessor:
                         for line in text.splitlines():
                             cli_log_lines.append(line)
                             progress_manager.append_line(line)
+                            # consumer コンテナの標準出力へ CLI の生ログを流す
+                            print(line, flush=True)
 
                 await loop.run_in_executor(None, _read_lines)
                 cli_exit_code_holder[0] = exec_result.exit_code or 0
