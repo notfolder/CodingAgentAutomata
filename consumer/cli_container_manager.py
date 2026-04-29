@@ -19,7 +19,51 @@ import docker.models.containers
 # ロガーを設定
 logger = logging.getLogger(__name__)
 
-DOCKER_CLIENT_TIMEOUT_SEC = int(os.environ.get("DOCKER_CLIENT_TIMEOUT_SEC", "120"))
+
+def _resolve_docker_client_timeout_sec() -> int:
+    """
+    Docker SDK クライアントのタイムアウト秒数を決定する。
+
+    Docker API 側タイムアウトが CLI 実行タイムアウトより先に発生しないよう、
+    実効値は常に CLI_EXEC_TIMEOUT_SEC 以上に補正する。
+    """
+    cli_timeout_raw = os.environ.get("CLI_EXEC_TIMEOUT_SEC", "10800")
+    docker_timeout_raw = os.environ.get("DOCKER_CLIENT_TIMEOUT_SEC")
+
+    try:
+        cli_timeout = int(cli_timeout_raw)
+    except ValueError:
+        logger.warning(
+            "CLIContainerManager: CLI_EXEC_TIMEOUT_SEC が不正なためデフォルト10800秒を使用します: %s",
+            cli_timeout_raw,
+        )
+        cli_timeout = 10800
+
+    if docker_timeout_raw is None:
+        return cli_timeout
+
+    try:
+        docker_timeout = int(docker_timeout_raw)
+    except ValueError:
+        logger.warning(
+            "CLIContainerManager: DOCKER_CLIENT_TIMEOUT_SEC が不正なため CLI_EXEC_TIMEOUT_SEC を使用します: %s",
+            docker_timeout_raw,
+        )
+        return cli_timeout
+
+    if docker_timeout < cli_timeout:
+        logger.info(
+            "CLIContainerManager: DOCKER_CLIENT_TIMEOUT_SEC(%d) < CLI_EXEC_TIMEOUT_SEC(%d) のため %d に補正します",
+            docker_timeout,
+            cli_timeout,
+            cli_timeout,
+        )
+        return cli_timeout
+
+    return docker_timeout
+
+
+DOCKER_CLIENT_TIMEOUT_SEC = _resolve_docker_client_timeout_sec()
 
 
 class CLIContainerManager:

@@ -153,8 +153,6 @@ services:
     environment:
       # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
       GITLAB_API_URL: http://gitlab:8929
-      # CLI 実行タイムアウトをテスト環境向けに短縮（デフォルト 3 時間 → 90 秒）
-      CLI_EXEC_TIMEOUT_SEC: "90"
       # DinD コンテナ起動の遅延（T-30 後等の高負荷時）に対応するため Docker クライアントタイムアウトを延長
       DOCKER_CLIENT_TIMEOUT_SEC: "240"
     depends_on:
