@@ -74,17 +74,7 @@ GITLAB_CONTAINER="${GITLAB_CONTAINER:-codingagentautomata-gitlab-1}"
 echo "テスト環境セットアップを開始します..."
 
 # -------------------------------------------------------
-# ステップ 1: CLI イメージをビルドする
-# -------------------------------------------------------
-echo ""
-echo "[ステップ 1] CLI イメージ（claude / opencode）をビルドします..."
-# CLI イメージのビルドに失敗してもe2eテスト自体は継続可能なためエラーを無視する
-./scripts/build_cli_exec.sh 2>&1 || {
-    echo "  警告: CLI イメージのビルドに失敗しました（e2eテストには不要のため続行します）"
-}
-
-# -------------------------------------------------------
-# ステップ 2: テスト環境のサービスを起動する
+# ステップ 1: テスト環境のサービスを起動する
 # -------------------------------------------------------
 echo ""
 if [ "${REAL_LLM}" = "true" ]; then
@@ -95,14 +85,14 @@ else
     PLAYWRIGHT_SERVICE="test_playwright"
 fi
 
-echo "[ステップ 2] サービスを起動します（profile: ${COMPOSE_PROFILE}）..."
+echo "[ステップ 1] サービスを起動します（profile: ${COMPOSE_PROFILE}）..."
 docker compose --profile "${COMPOSE_PROFILE}" up -d --build
 
 # -------------------------------------------------------
-# ステップ 2.5: GitLab root パスワードを変更する
+# ステップ 1.5: GitLab root パスワードを変更する
 # -------------------------------------------------------
 echo ""
-echo "[ステップ 2.5] GitLab root パスワードを変更します..."
+echo "[ステップ 1.5] GitLab root パスワードを変更します..."
 # 本システムの管理者パスワードと同じ固定値を使用
 GITLAB_ROOT_PASSWORD="Admin@123456"
 
@@ -126,10 +116,10 @@ if [ "${PASSWORD_CHANGED}" = "false" ]; then
 fi
 
 # -------------------------------------------------------
-# ステップ 3: Backend の起動と Alembic マイグレーション
+# ステップ 2: Backend の起動と Alembic マイグレーション
 # -------------------------------------------------------
 echo ""
-echo "[ステップ 3] Backend の起動を待機し Alembic マイグレーションを実行します..."
+echo "[ステップ 2] Backend の起動を待機し Alembic マイグレーションを実行します..."
 BACKEND_READY=false
 for i in $(seq 1 30); do
     if curl -sf http://localhost:8000/health 2>/dev/null; then
@@ -163,28 +153,27 @@ if [ "${ALEMBIC_SUCCESS}" = "false" ]; then
 fi
 
 # -------------------------------------------------------
-# ステップ 4: setup.py（管理者ユーザー・CLIアダプタ登録）
+# ステップ 3: setup.sh（CLI イメージビルド + 管理者ユーザー・CLIアダプタ登録）
 # -------------------------------------------------------
 echo ""
-echo "[ステップ 4] setup.py を実行します（管理者ユーザー・CLIアダプタ登録）..."
+echo "[ステップ 3] setup.sh を実行します（CLI イメージビルド + 管理者ユーザー・CLIアダプタ登録）..."
 SETUP_SUCCESS=false
 for i in $(seq 1 3); do
-    if docker compose run --rm -T backend \
-        sh -c "cd /app && python scripts/setup.py \
-            --username admin \
-            --email admin@example.com \
-            --password Admin@123456 \
-            --virtual-key sk-placeholder \
-            --default-cli claude \
-            --default-model ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}"; then
+    if ./scripts/setup.sh \
+        --username admin \
+        --email admin@example.com \
+        --password Admin@123456 \
+        --virtual-key sk-placeholder \
+        --default-cli claude \
+        --default-model "${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}"; then
         SETUP_SUCCESS=true
         break
     fi
-    echo "  setup.py 失敗 (試行 ${i}/3), 5秒後に再試行します..."
+    echo "  setup.sh 失敗 (試行 ${i}/3), 5秒後に再試行します..."
     sleep 5
 done
 if [ "${SETUP_SUCCESS}" = "false" ]; then
-    echo "エラー: setup.py の実行に失敗しました" >&2
+    echo "エラー: setup.sh の実行に失敗しました" >&2
     exit 1
 fi
 

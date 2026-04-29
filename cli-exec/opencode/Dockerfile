@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # opencode cli-exec コンテナイメージ
 # DinD（Docker-in-Docker）構成で opencode CLI を実行する
 
@@ -15,7 +13,8 @@ RUN apk add --no-cache \
     py3-pip \
     bash \
     jq \
-    gcompat
+    gcompat \
+    docker-compose
 
 # uv (Pythonパッケージマネージャー) インストール
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -51,7 +50,7 @@ EOF
 RUN chmod +x /usr/local/bin/dind-start.sh
 
 # ビルド時に一度 dockerd を起動し、必要ファイルの初期化を済ませる
-RUN --security=insecure sh -c 'dockerd >/tmp/dockerd-build.log 2>&1 & pid=$!; sleep 10; kill "$pid" || true; wait "$pid" || true'
+RUN sh -c 'dockerd >/tmp/dockerd-build.log 2>&1 & pid=$!; sleep 10; kill "$pid" || true; wait "$pid" || true'
 
 WORKDIR /workspace
 

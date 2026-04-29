@@ -200,6 +200,8 @@ services:
     environment:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://localhost:8929'
+        # テスト用途では不要な監視系機能を停止して起動時間とリソース消費を削減
+        prometheus_monitoring['enable'] = false
         gitlab_rails['allow_local_requests_from_web_hooks_and_services'] = true
         gitlab_rails['outbound_local_requests_allowlist'] = ['producer']
     ports:

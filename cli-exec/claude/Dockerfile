@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # Claude Code cli-exec コンテナイメージ
 # DinD（Docker-in-Docker）構成で Claude Code CLI を実行する
 
@@ -14,7 +12,8 @@ RUN apk add --no-cache \
     python3 \
     py3-pip \
     bash \
-    jq
+    jq \
+    docker-compose
 
 # uv (Pythonパッケージマネージャー) インストール
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -42,7 +41,7 @@ EOF
 RUN chmod +x /usr/local/bin/dind-start.sh
 
 # ビルド時に一度 dockerd を起動し、必要ファイルの初期化を済ませる
-RUN --security=insecure sh -c 'dockerd >/tmp/dockerd-build.log 2>&1 & pid=$!; sleep 10; kill "$pid" || true; wait "$pid" || true'
+RUN sh -c 'dockerd >/tmp/dockerd-build.log 2>&1 & pid=$!; sleep 10; kill "$pid" || true; wait "$pid" || true'
 
 # 非 root ユーザーを作成（Claude Code CLI は root での --dangerously-skip-permissions 使用を禁止するため）
 RUN addgroup -S claude && adduser -S -G claude claude
