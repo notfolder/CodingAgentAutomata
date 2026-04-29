@@ -523,6 +523,30 @@ class GitLabClient:
         result = self._call_with_retry(_call)
         return bool(result)
 
+    def list_branches(self, project_id: int, max_count: int = 100) -> list[str]:
+        """
+        指定プロジェクトの既存ブランチ名一覧を取得する。
+
+        Args:
+            project_id: GitLabプロジェクトID
+            max_count: 取得する最大件数（デフォルト: 100）
+
+        Returns:
+            ブランチ名のリスト
+        """
+        if max_count <= 0:
+            return []
+
+        def _call():
+            project = self._gl.projects.get(project_id)
+            # 全件取得するとプロンプトサイズが大きくなりやすいため、最大件数で打ち切る
+            branches = project.branches.list(page=1, per_page=max_count)
+            names = [b.attributes.get("name", "") for b in branches]
+            return [n for n in names if n]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
+
     # ------------------------------------------------------------------
     # プロジェクト・ユーザー操作
     # ------------------------------------------------------------------

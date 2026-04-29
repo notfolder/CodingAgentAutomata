@@ -274,6 +274,14 @@ class IssueToMRConverter:
             repository_url: str = (
                 project_info.get("http_url_to_repo", "") if project_info else ""
             )
+            existing_branch_names: list[str] = self._gitlab_client.list_branches(
+                project_id, max_count=100
+            )
+            existing_branches: str = (
+                "\n".join(f"- {name}" for name in sorted(existing_branch_names))
+                if existing_branch_names
+                else "- (既存ブランチなし)"
+            )
 
             prompt: str = self._prompt_builder.build_f3_prompt(
                 issue_title=issue.get("title", ""),
@@ -281,6 +289,7 @@ class IssueToMRConverter:
                 issue_comments=issue_comments,
                 project_name=project_name,
                 repository_url=repository_url,
+                existing_branches=existing_branches,
             )
 
             # ==========================================
