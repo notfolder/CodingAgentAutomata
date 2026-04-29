@@ -264,13 +264,14 @@ class MRProcessor:
             None,
         )
 
-        if current_head_sha == initial_head_sha and status_out.strip() == "":
-            if matched_no_op_phrase:
-                return True, (
-                    "CLI は正常終了しましたが、具体的な作業内容を解釈できない旨の応答のみで終了し、"
-                    "コミットや変更がありませんでした。"
-                )
-            return True, "CLI は正常終了しましたが、コミットや変更がありませんでした。"
+        # タスクを解釈できない旨の明示フレーズがログに含まれ、かつコミット・変更もない場合のみ
+        # no-op として失敗扱いにする。
+        # コミット・変更なしでも正常終了した場合は完了とみなす（レビューのみ・変更不要等の正当なケース）。
+        if matched_no_op_phrase and current_head_sha == initial_head_sha and status_out.strip() == "":
+            return True, (
+                "CLI は正常終了しましたが、具体的な作業内容を解釈できない旨の応答のみで終了し、"
+                "コミットや変更がありませんでした。"
+            )
 
         return False, ""
 
