@@ -267,14 +267,81 @@ export LITELLM_MASTER_KEY
 # -------------------------------------------------------
 echo ""
 echo "[ステップ 5.5] GitLab テストユーザーのパスワードを固定化します..."
+
+# GitLab rails 環境が応答することを確認（最大30秒待機）
+echo "  GitLab rails 環境の準備を確認中..."
+RAILS_READY=false
+for i in $(seq 1 30); do
+    if docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "puts 'OK'" >/dev/null 2>&1; then
+        RAILS_READY=true
+        echo "  GitLab rails 環境: 準備完了"
+        break
+    fi
+    echo "  GitLab rails 環境: 起動待機中... (${i}/30)"
+    sleep 1
+done
+
+if [ "${RAILS_READY}" = "false" ]; then
+    echo "エラー: GitLab rails 環境が応答しません（最大30秒待機）" >&2
+    docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "puts 'test'" 2>&1 | head -20 >&2
+    exit 1
+fi
+
+# 各テストユーザーのパスワード設定
 for gitlab_user in testuser-claude testuser-opencode; do
-    if docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "user = User.find_by_username('${gitlab_user}'); if user.nil?; STDERR.puts('not_found'); exit 11; end; user.password='${TEST_USER_PASSWORD}'; user.password_confirmation='${TEST_USER_PASSWORD}'; user.password_automatically_set=false if user.respond_to?(:password_automatically_set=); user.save!(validate: false); unless user.valid_password?('${TEST_USER_PASSWORD}'); STDERR.puts('verify_failed'); exit 12; end; puts 'updated'" >/dev/null; then
-        echo "  ${gitlab_user} のパスワードを設定しました"
+    echo "  ${gitlab_user} のパスワード設定処理を開始..."
+    
+    # Ruby スクリプトを整形して実行（エラー出力を完全に記録）
+    # 処理内容: ユーザー検索 → パスワード設定 → 保存 → 検証
+    RUBY_SCRIPT=$(cat <<'RUBY_EOF'
+user = User.find_by_username('GITLAB_USER')
+if user.nil?
+  STDERR.puts("ERROR: ユーザーが見つかりません: GITLAB_USER")
+  exit 11
+end
+
+# パスワード設定
+user.password = 'TEST_PASSWORD'
+user.password_confirmation = 'TEST_PASSWORD'
+user.password_automatically_set = false if user.respond_to?(:password_automatically_set=)
+
+# 保存（検証スキップ）
+unless user.save!(validate: false)
+  STDERR.puts("ERROR: ユーザーの保存に失敗しました: #{user.errors.full_messages.join(', ')}")
+  exit 12
+end
+
+# パスワード検証
+unless user.valid_password?('TEST_PASSWORD')
+  STDERR.puts("ERROR: パスワード検証に失敗しました（保存されたが検証に失敗）")
+  exit 13
+end
+
+puts "SUCCESS: #{user.username} のパスワードを正常に設定しました"
+RUBY_EOF
+)
+    
+    # プレースホルダーを置換
+    RUBY_SCRIPT="${RUBY_SCRIPT//GITLAB_USER/$gitlab_user}"
+    RUBY_SCRIPT="${RUBY_SCRIPT//TEST_PASSWORD/$TEST_USER_PASSWORD}"
+    
+    # スクリプト実行（stderr と stdout を両方記録）
+    SETUP_OUTPUT=$(docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "${RUBY_SCRIPT}" 2>&1)
+    SETUP_EXIT_CODE=$?
+    
+    # 実行結果の判定と詳細出力
+    if [ ${SETUP_EXIT_CODE} -eq 0 ]; then
+        echo "  ✓ ${gitlab_user}: パスワード設定成功"
+        echo "    ${SETUP_OUTPUT}"
     else
-        echo "エラー: ${gitlab_user} のパスワード設定に失敗しました" >&2
+        echo "エラー: ${gitlab_user} のパスワード設定に失敗しました (exit code: ${SETUP_EXIT_CODE})" >&2
+        echo "  出力内容:" >&2
+        echo "${SETUP_OUTPUT}" | sed 's/^/    /' >&2
         exit 1
     fi
 done
+
+echo "  全テストユーザーのパスワード設定が完了しました"
 
 # -------------------------------------------------------
 # ステップ 6: .env.test の内容を反映するためサービスを force-recreate
