@@ -57,4 +57,3 @@ USER claude
 WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/dind-start.sh"]
-CMD ["sleep", "infinity"]

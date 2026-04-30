@@ -55,4 +55,3 @@ RUN sh -c 'dockerd >/tmp/dockerd-build.log 2>&1 & pid=$!; sleep 10; kill "$pid" 
 WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/dind-start.sh"]
-CMD ["sleep", "infinity"]

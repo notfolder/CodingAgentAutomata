@@ -8,9 +8,10 @@ SIGTERM / SIGINT 受信時はグレースフルシャットダウンを行い、
 
 import asyncio
 import logging
-import os
 import signal
 import sys
+
+from shared.shutdown_state import request_shutdown, reset_shutdown
 
 # ロガー設定（標準出力に INFO 以上を出力）
 logging.basicConfig(
@@ -26,7 +27,7 @@ class ConsumerWorker:
     RabbitMQ からタスクをデキューして TaskProcessor にディスパッチするワーカー。
 
     RabbitMQClient の consume（ブロッキング）を実行し、
-    メッセージ受信ごとに asyncio.run() で TaskProcessor.process を呼び出す。
+    メッセージ受信ごとの実処理は別スレッド経由で asyncio.run() する。
     SIGTERM 受信時は shutdown() を呼び出すことでグレースフルに停止する。
     """
 
@@ -56,6 +57,8 @@ class ConsumerWorker:
         RabbitMQ の consume を開始する（ブロッキング）。
 
         メッセージを受信するたびに TaskProcessor.process を asyncio.run() で実行する。
+        実際のタスク実行は RabbitMQ の consume スレッドとは別スレッドで行われるため、
+        長時間処理中も heartbeat が維持される。
         shutdown() が呼ばれると start_consuming() が戻り、このメソッドも終了する。
         """
         logger.info("ConsumerWorker: RabbitMQ consume を開始します")
@@ -85,6 +88,7 @@ async def main() -> None:
     # ------------------------------------------------------------------
     from shared.config.config import get_settings, Settings
     settings: Settings = get_settings()
+    reset_shutdown()
 
     # ------------------------------------------------------------------
     # DB セッションファクトリ初期化
@@ -128,7 +132,10 @@ async def main() -> None:
     cli_log_masker = CLILogMasker()
     cli_adapter_resolver = CLIAdapterResolver(db_session_factory=db_session_factory)
     prompt_builder = PromptBuilder(db_session_factory=db_session_factory)
-    cli_container_manager = CLIContainerManager()
+    # DB から全アダプターのコンテナイメージを取得し、ウォームアップに使用する
+    # （CLIContainerManager 初期化より先に cli_adapter_resolver を生成しておく必要がある）
+    warmup_images = cli_adapter_resolver.fetch_all_container_images()
+    cli_container_manager = CLIContainerManager(warmup_images=warmup_images)
 
     # ProgressManager ファクトリ関数
     # project_id と mr_iid を受け取って ProgressManager インスタンスを返す
@@ -188,6 +195,7 @@ async def main() -> None:
     # ------------------------------------------------------------------
     def _handle_signal(sig, frame) -> None:
         """SIGTERM / SIGINT を受信したときのシグナルハンドラ。"""
+        request_shutdown()
         logger.info(
             "Consumer: シグナル %s を受信しました。グレースフルシャットダウンを開始します。",
             signal.Signals(sig).name,

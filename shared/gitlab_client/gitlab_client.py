@@ -12,6 +12,8 @@ from typing import Optional
 import gitlab
 import gitlab.exceptions
 
+from shared.shutdown_state import is_shutdown_requested
+
 # ロガーを設定
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,18 @@ _MAX_RETRIES = 3          # 5xx / 接続エラーの最大リトライ回数
 _RATE_LIMIT_MAX_RETRIES = 5  # 429 レートリミット時の最大リトライ回数
 _BASE_BACKOFF_SEC = 1.0   # バックオフ基底秒数
 _MAX_BACKOFF_SEC = 60.0   # バックオフ最大待機秒数
+
+
+def _sleep_with_shutdown_check(wait_sec: float) -> bool:
+    """待機中にシャットダウン要求が来たら即座に中断する。"""
+    remaining = wait_sec
+    while remaining > 0:
+        if is_shutdown_requested():
+            return False
+        sleep_chunk = min(0.2, remaining)
+        time.sleep(sleep_chunk)
+        remaining -= sleep_chunk
+    return not is_shutdown_requested()
 
 
 class GitLabClient:
@@ -69,6 +83,11 @@ class GitLabClient:
         rate_limit_count: int = 0
 
         for attempt in range(_MAX_RETRIES):
+            if is_shutdown_requested():
+                logger.info("GitLab call aborted due to shutdown request")
+                if last_exc:
+                    raise last_exc
+                raise RuntimeError("シャットダウン要求のため GitLab API 呼び出しを中止しました。")
             try:
                 return func(*args, **kwargs)
             except gitlab.exceptions.GitlabHttpError as exc:
@@ -91,7 +110,9 @@ class GitLabClient:
                     wait = min(_BASE_BACKOFF_SEC * (2 ** rate_limit_count), _MAX_BACKOFF_SEC)
                     logger.warning("GitLab rate limit (429), retry %d/%d in %.1fs",
                                    rate_limit_count, _RATE_LIMIT_MAX_RETRIES, wait)
-                    time.sleep(wait)
+                    if not _sleep_with_shutdown_check(wait):
+                        logger.info("GitLab rate limit retry aborted due to shutdown request")
+                        raise exc
                     last_exc = exc
                     # 429 はメインループのカウントを消費しない（continue でスキップ）
                     continue
@@ -100,7 +121,9 @@ class GitLabClient:
                     wait = min(_BASE_BACKOFF_SEC * (2 ** attempt), _MAX_BACKOFF_SEC)
                     logger.warning("GitLab server error (%d), retry %d/%d in %.1fs",
                                    status, attempt + 1, _MAX_RETRIES, wait)
-                    time.sleep(wait)
+                    if not _sleep_with_shutdown_check(wait):
+                        logger.info("GitLab server error retry aborted due to shutdown request")
+                        raise exc
                     last_exc = exc
                     continue
                 # その他の HTTPエラーは即例外送出
@@ -109,7 +132,9 @@ class GitLabClient:
                 wait = min(_BASE_BACKOFF_SEC * (2 ** attempt), _MAX_BACKOFF_SEC)
                 logger.warning("GitLab request error: %s, retry %d/%d in %.1fs",
                                exc, attempt + 1, _MAX_RETRIES, wait)
-                time.sleep(wait)
+                if not _sleep_with_shutdown_check(wait):
+                    logger.info("GitLab request retry aborted due to shutdown request")
+                    raise exc
                 last_exc = exc
 
         # リトライ上限到達

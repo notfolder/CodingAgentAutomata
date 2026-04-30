@@ -10,11 +10,14 @@ import logging
 import os
 import socket
 import tarfile
+import threading
+import time
 from typing import Optional
 
 import docker
 import docker.errors
 import docker.models.containers
+import requests
 
 # ロガーを設定
 logger = logging.getLogger(__name__)
@@ -74,12 +77,16 @@ class CLIContainerManager:
     privileged=True（DinD構成）でコンテナを起動する。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, warmup_images: list[str] | None = None) -> None:
         """
         初期化。
 
         docker.from_env() で Docker クライアントを初期化する。
         Docker daemon に接続できない場合は例外を送出する。
+
+        Args:
+            warmup_images: consumer 起動時にウォームアップするイメージ名のリスト。
+                           None または空リストの場合はウォームアップをスキップする。
         """
         # docker.sock 経由で Docker デーモンに接続
         # 初回起動の重いコンテナでも start() がタイムアウトしにくいよう待機時間を延長
@@ -93,6 +100,89 @@ class CLIContainerManager:
         logger.info(
             "CLIContainerManager: CLI コンテナ接続先ネットワーク=%s", self._cli_network
         )
+        # auto_remove=True で即時削除されるコンテナのログを安全に読むため、
+        # start() 前に取得したストリームを一時保持する。
+        self._stdout_stream_cache: dict[str, object] = {}
+
+        # privileged DinD コンテナの初回 start() は Docker daemon の iptables/runc 初期化で
+        # 最大250秒程度ブロックする間欠的な問題がある。
+        # consumer 起動時に軽量コンテナを1本起動しておくことで、
+        # 実タスク処理時の遅延を回避する（ウォームアップ）。
+        self._warmup_images: list[str] = warmup_images or []
+        warmup_thread = threading.Thread(
+            target=self._warmup_cli_images,
+            daemon=True,
+            name="cli-warmup",
+        )
+        warmup_thread.start()
+
+    def _warmup_cli_images(self) -> None:
+        """
+        privileged DinD コンテナの起動遅延を緩和するウォームアップを実行する。
+
+        環境変数 WARMUP_CLI_IMAGES にカンマ区切りで指定されたイメージそれぞれについて、
+        `echo warmup` だけ実行する軽量コンテナを起動・完了させる。
+        これにより Docker daemon の iptables/runc 初期化が事前に行われ、
+        実タスク処理時の start() 遅延を回避できる。
+
+        エラーが発生しても無視し、本処理に影響を与えない。
+        warmup_images が空の場合は何もしない。
+        """
+        images = self._warmup_images
+        if not images:
+            logger.debug("CLIContainerManager._warmup_cli_images: ウォームアップ対象イメージなしのためスキップ")
+            return
+
+        logger.info(
+            "CLIContainerManager._warmup_cli_images: ウォームアップ開始 images=%s", images
+        )
+
+        for image in images:
+            warmup_name = f"cli-warmup-{image.replace(':', '-').replace('/', '-')}"
+            t0 = time.monotonic()
+            container = None
+            try:
+                # 同名残骸があれば削除
+                try:
+                    old = self._client.containers.get(warmup_name)
+                    old.remove(force=True)
+                except docker.errors.NotFound:
+                    pass
+
+                container = self._client.containers.create(
+                    image=image,
+                    name=warmup_name,
+                    command=["echo", "warmup"],
+                    privileged=True,
+                    network=self._cli_network if self._cli_network else None,
+                    auto_remove=True,
+                )
+                container.start()
+                # 完了まで待つ（ウォームアップ目的のため exit code は無視）
+                try:
+                    container.wait(timeout=600)
+                except Exception:
+                    pass
+                elapsed = time.monotonic() - t0
+                logger.info(
+                    "CLIContainerManager._warmup_cli_images: 完了 image=%s elapsed=%.3fs",
+                    image,
+                    elapsed,
+                )
+            except Exception as exc:
+                elapsed = time.monotonic() - t0
+                logger.warning(
+                    "CLIContainerManager._warmup_cli_images: 失敗（無視） image=%s elapsed=%.3fs: %s",
+                    image,
+                    elapsed,
+                    exc,
+                )
+                # コンテナが残っていれば削除を試みる
+                if container is not None:
+                    try:
+                        container.remove(force=True)
+                    except Exception:
+                        pass
 
     def _get_self_network(self) -> Optional[str]:
         """
@@ -279,6 +369,153 @@ class CLIContainerManager:
         )
         return exit_code, output
 
+    def run_container_once(
+        self,
+        container_name: str,
+        image: str,
+        env_vars: dict[str, str],
+        command: str | list[str],
+    ) -> str:
+        """
+        `docker run --rm` 相当で単発コンテナを起動し、コンテナ ID を返す。
+
+        Args:
+            container_name: コンテナ名
+            image: コンテナイメージ名・タグ
+            env_vars: コンテナに渡す環境変数
+            command: コンテナのメインプロセスとして実行するコマンド
+
+        Returns:
+            str: 起動したコンテナ ID
+        """
+        logger.info(
+            "CLIContainerManager.run_container_once: name=%s, image=%s",
+            container_name,
+            image,
+        )
+
+        # 前回失敗時の同名残骸を削除
+        try:
+            old_container = self._client.containers.get(container_name)
+            old_container.remove(force=True)
+            logger.info(
+                "CLIContainerManager.run_container_once: 既存コンテナを削除しました name=%s",
+                container_name,
+            )
+        except docker.errors.NotFound:
+            pass
+        except Exception as exc:
+            logger.warning(
+                "CLIContainerManager.run_container_once: 既存コンテナ削除失敗（無視） name=%s: %s",
+                container_name,
+                exc,
+            )
+
+        # containers.create() は即座に返るが、container.start() は privileged DinD
+        # コンテナの初回起動時に Docker daemon の iptables/runc 初期化でブロックする
+        # （計測: create=0.037s, start=136s）。
+        # start() を別スレッドで実行し、コンテナが running/exited 状態になったら
+        # メインスレッドに制御を返すことで呼び出し元のブロッキングを回避する。
+        container: docker.models.containers.Container = self._client.containers.create(
+            image=image,
+            name=container_name,
+            environment=env_vars,
+            command=command,
+            privileged=True,
+            network=self._cli_network if self._cli_network else None,
+            auto_remove=True,
+        )
+        container_id = container.id
+
+        # auto_remove=True でも NotFound 競合を避けるため、
+        # コンテナ起動前に follow ログストリームを確保してキャッシュする。
+        # 起動後に get(container_id) する必要がなくなるため、削除競合を回避できる。
+        try:
+            self._stdout_stream_cache[container_id] = container.logs(
+                stream=True,
+                follow=True,
+                stdout=True,
+                stderr=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "CLIContainerManager.run_container_once: 事前ログストリーム取得失敗（継続） container_id=%s: %s",
+                container_id,
+                exc,
+            )
+
+        start_exc: list[Exception] = []
+
+        def _start() -> None:
+            try:
+                container.start()
+            except Exception as exc:
+                start_exc.append(exc)
+
+        start_thread = threading.Thread(target=_start, daemon=True)
+        start_thread.start()
+
+        # コンテナが running または exited になるまでポーリング
+        # exited はモック環境など即終了する場合に対応
+        _poll_interval = 0.2
+        _poll_timeout = 30.0
+        _elapsed = 0.0
+        while _elapsed < _poll_timeout:
+            try:
+                c = self._client.containers.get(container_id)
+                if c.status in ("running", "exited"):
+                    break
+            except docker.errors.NotFound:
+                # start() 完了後に即削除された場合も起動成功とみなす
+                break
+            except Exception:
+                pass
+            time.sleep(_poll_interval)
+            _elapsed += _poll_interval
+        else:
+            # ポーリングタイムアウト: start() エラーがあれば再送出
+            if start_exc:
+                raise start_exc[0]
+            logger.warning(
+                "CLIContainerManager.run_container_once: コンテナ起動確認タイムアウト container_id=%s",
+                container_id,
+            )
+
+        if start_exc:
+            raise start_exc[0]
+
+        logger.info(
+            "CLIContainerManager.run_container_once: container_id=%s",
+            container_id,
+        )
+        return container_id
+
+    def wait_container_exit(self, container_id: str, timeout_sec: int) -> int:
+        """
+        コンテナ終了を待ち、終了コードを返す。
+
+        Args:
+            container_id: 対象コンテナ ID
+            timeout_sec: 待機タイムアウト秒
+
+        Returns:
+            int: 終了コード
+
+        Raises:
+            TimeoutError: タイムアウト時
+            docker.errors.DockerException: Docker API エラー時
+        """
+        try:
+            container = self._client.containers.get(container_id)
+            result = container.wait(timeout=timeout_sec)
+            status_code = result.get("StatusCode", -1)
+            return int(status_code) if isinstance(status_code, int) else -1
+        except requests.exceptions.ReadTimeout as exc:
+            raise TimeoutError(f"コンテナ終了待機がタイムアウトしました: {timeout_sec}秒") from exc
+        except docker.errors.NotFound:
+            # auto-remove 済みで取得できない場合は終了済みとみなす
+            return 0
+
     def stop_container(self, container_id: str) -> None:
         """
         コンテナを停止・破棄する。
@@ -291,6 +528,7 @@ class CLIContainerManager:
         logger.info(
             "CLIContainerManager.stop_container: container_id=%s", container_id
         )
+        self._stdout_stream_cache.pop(container_id, None)
         try:
             container: docker.models.containers.Container = (
                 self._client.containers.get(container_id)
@@ -325,6 +563,10 @@ class CLIContainerManager:
         Returns:
             ストリームジェネレータ（各要素はバイト列）
         """
+        cached_stream = self._stdout_stream_cache.pop(container_id, None)
+        if cached_stream is not None:
+            return cached_stream
+
         container: docker.models.containers.Container = self._client.containers.get(
             container_id
         )

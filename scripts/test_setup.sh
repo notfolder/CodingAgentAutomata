@@ -25,6 +25,43 @@ done
 # -------------------------------------------------------
 ENV_FILE="${PROJECT_ROOT}/.env"
 ENV_EXAMPLE="${PROJECT_ROOT}/.env.example"
+ENV_TEST_FILE="${PROJECT_ROOT}/.env.test"
+
+load_env_file() {
+    local file_path="$1"
+    if [ ! -f "${file_path}" ]; then
+        return 0
+    fi
+
+    while IFS= read -r line || [ -n "${line}" ]; do
+        # コメント行と空行をスキップ
+        case "${line}" in
+            ''|'#'*)
+                continue
+                ;;
+        esac
+
+        # KEY=VALUE 形式のみ受け付ける
+        if [[ "${line}" != *=* ]]; then
+            continue
+        fi
+
+        local key="${line%%=*}"
+        local value="${line#*=}"
+
+        # 末尾CRを除去
+        key="${key%$'\r'}"
+        value="${value%$'\r'}"
+
+        # 既存のダブルクォートを剥がす
+        if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+            value="${value#\"}"
+            value="${value%\"}"
+        fi
+
+        export "${key}=${value}"
+    done < "${file_path}"
+}
 
 if [ ! -f "${ENV_FILE}" ]; then
     echo "[ステップ 0] .env が存在しないため .env.example をコピーして生成します..."
@@ -62,11 +99,7 @@ fi
 # .env を読み込む（既に設定済みの環境変数は上書きしない）
 # -------------------------------------------------------
 echo ".env を読み込みます: ${ENV_FILE}"
-set -o allexport
-# shellcheck disable=SC1090
-# スペースを含む値を正しく扱うため KEY="VALUE" 形式に変換してから読み込む
-source <(grep -v '^\s*#' "${ENV_FILE}" | grep -v '^\s*$' | sed 's/^\([^=]*\)=\(.*\)$/\1="\2"/')
-set +o allexport
+load_env_file "${ENV_FILE}"
 
 # GitLab コンテナ名（.env 未設定時は docker-compose の既定名を使用）
 GITLAB_CONTAINER="${GITLAB_CONTAINER:-codingagentautomata-gitlab-1}"
@@ -281,6 +314,11 @@ export LITELLM_MASTER_KEY
 
 "${VENV_DIR}/bin/python3" "${SCRIPT_DIR}/test_setup.py"
 
+if [ -f "${ENV_TEST_FILE}" ]; then
+    echo "  .env.test を読み込みます: ${ENV_TEST_FILE}"
+    load_env_file "${ENV_TEST_FILE}"
+fi
+
 # -------------------------------------------------------
 # ステップ 5.5: GitLab テストユーザーのパスワードを固定化
 # -------------------------------------------------------
@@ -366,8 +404,14 @@ echo "  全テストユーザーのパスワード設定が完了しました"
 # ステップ 6: .env.test の内容を反映するためサービスを force-recreate
 # -------------------------------------------------------
 echo ""
-echo "[ステップ 6] .env.test の内容を反映するため producer / consumer を再起動します..."
-docker compose up -d --force-recreate producer consumer
+if [ "${RUN_TESTS}" = "true" ]; then
+    echo "[ステップ 6] --run-tests 指定のため producer / consumer の再起動をステップ7のcleanup後に遅延します..."
+    # 旧タスクの取り込みを防ぐため、この時点では停止状態を維持する
+    docker compose stop producer consumer >/dev/null 2>&1 || true
+else
+    echo "[ステップ 6] .env.test の内容を反映するため producer / consumer を再起動します..."
+    docker compose up -d --force-recreate producer consumer
+fi
 
 echo ""
 echo "テスト環境セットアップが完了しました。"
@@ -379,12 +423,19 @@ cleanup_test_runtime_state() {
     local phase="$1"
 
     echo ""
-    echo "[クリーンアップ:${phase}] consumer停止 → キュー掃除 → pending/running整理 → consumer再起動 を実行します..."
+    echo "[クリーンアップ:${phase}] producer/consumer停止 → GitLab stale trigger掃除 → キュー掃除 → pending/running整理 → producer/consumer再起動 を実行します..."
 
     # クリーンアップ失敗で本処理を止めないように一時的にerrexitを無効化
     set +e
 
-    # 1) consumer 停止（処理中タスクの再配信状態を作る）
+    # 1) producer / consumer 停止（再投入停止 + 処理中タスクの再配信状態を作る）
+    docker compose stop producer >/dev/null 2>&1
+    if [ $? -eq 0 ]; then
+        echo "  producer を停止しました"
+    else
+        echo "  警告: producer の停止に失敗しました（続行）" >&2
+    fi
+
     docker compose stop consumer >/dev/null 2>&1
     if [ $? -eq 0 ]; then
         echo "  consumer を停止しました"
@@ -392,7 +443,92 @@ cleanup_test_runtime_state() {
         echo "  警告: consumer の停止に失敗しました（続行）" >&2
     fi
 
-    # 2) RabbitMQ tasks キューをパージ
+    # 2) GitLab 側の stale な bot トリガー状態を解除
+    if [ -n "${GITLAB_ADMIN_TOKEN:-}" ] && [ -n "${GITLAB_PROJECT_ID:-}" ]; then
+        GITLAB_TRIGGER_CLEANUP_OUTPUT=$(GITLAB_API_URL="${GITLAB_API_URL:-http://localhost:8929}" \
+            GITLAB_ADMIN_TOKEN="${GITLAB_ADMIN_TOKEN}" \
+            GITLAB_PROJECT_ID="${GITLAB_PROJECT_ID}" \
+            GITLAB_BOT_NAME="${GITLAB_BOT_NAME:-coding-agent-bot}" \
+            GITLAB_BOT_LABEL="${GITLAB_BOT_LABEL:-coding agent}" \
+            GITLAB_PROCESSING_LABEL="${GITLAB_PROCESSING_LABEL:-coding agent processing}" \
+            "${VENV_DIR}/bin/python3" - <<'PY'
+import os
+import sys
+
+import requests
+
+
+api_url = os.environ["GITLAB_API_URL"].rstrip("/")
+project_id = os.environ["GITLAB_PROJECT_ID"]
+token = os.environ["GITLAB_ADMIN_TOKEN"]
+bot_name = os.environ["GITLAB_BOT_NAME"]
+labels_to_strip = {
+    os.environ["GITLAB_BOT_LABEL"],
+    os.environ["GITLAB_PROCESSING_LABEL"],
+}
+headers = {"PRIVATE-TOKEN": token, "Content-Type": "application/json"}
+
+
+def request(method: str, path: str, **kwargs):
+    return requests.request(method, f"{api_url}/api/v4{path}", headers=headers, timeout=30, **kwargs)
+
+
+user_resp = request("GET", f"/users?username={bot_name}")
+bot_user_id = None
+if user_resp.status_code == 200 and user_resp.json():
+    bot_user_id = user_resp.json()[0]["id"]
+
+updated = 0
+for resource in ("issues", "merge_requests"):
+    page = 1
+    while True:
+        resp = request(
+            "GET",
+            f"/projects/{project_id}/{resource}?state=opened&per_page=100&page={page}",
+        )
+        if resp.status_code != 200:
+            print(f"warning:{resource}:list_failed:{resp.status_code}")
+            break
+        items = resp.json()
+        if not items:
+            break
+        for item in items:
+            labels = item.get("labels", []) or []
+            assignees = item.get("assignees", []) or []
+            assignee_ids = [a.get("id") for a in assignees if a.get("id") is not None]
+            bot_assigned = bot_user_id is not None and bot_user_id in assignee_ids
+            has_trigger_label = any(label in labels_to_strip for label in labels)
+            if not bot_assigned and not has_trigger_label:
+                continue
+            next_assignee_ids = [aid for aid in assignee_ids if aid != bot_user_id]
+            next_labels = [label for label in labels if label not in labels_to_strip]
+            update_resp = request(
+                "PUT",
+                f"/projects/{project_id}/{resource}/{item['iid']}",
+                json={
+                    "assignee_ids": next_assignee_ids,
+                    "labels": ",".join(next_labels),
+                },
+            )
+            if update_resp.status_code == 200:
+                updated += 1
+            else:
+                print(f"warning:{resource}:{item['iid']}:update_failed:{update_resp.status_code}")
+        page += 1
+
+print(updated)
+PY
+        )
+        if [ $? -eq 0 ]; then
+            echo "  GitLab stale trigger 状態を解除しました: ${GITLAB_TRIGGER_CLEANUP_OUTPUT}件"
+        else
+            echo "  警告: GitLab stale trigger 状態の解除に失敗しました（続行）" >&2
+        fi
+    else
+        echo "  警告: GITLAB_ADMIN_TOKEN または GITLAB_PROJECT_ID が未設定のため GitLab stale trigger 状態の解除をスキップします" >&2
+    fi
+
+    # 3) RabbitMQ tasks キューをパージ
     local rabbitmq_user="${RABBITMQ_DEFAULT_USER:-guest}"
     local rabbitmq_pass="${RABBITMQ_DEFAULT_PASS:-guest}"
     local rabbitmq_mgmt_url="${RABBITMQ_MGMT_URL:-http://localhost:15672}"
@@ -405,7 +541,7 @@ cleanup_test_runtime_state() {
         echo "  警告: RabbitMQ tasks キューのパージに失敗しました (HTTP ${queue_status})" >&2
     fi
 
-    # 3) DB の pending/running タスクを failed に更新
+    # 4) DB の pending/running タスクを failed に更新
     local db_user="${POSTGRES_USER:-user}"
     local db_name="${POSTGRES_DB:-db}"
     local db_update_output
@@ -429,12 +565,21 @@ SELECT COUNT(*) FROM updated;
         echo "  警告: pending/running タスクの整理に失敗しました（続行）" >&2
     fi
 
-    # 4) consumer 再起動
-    docker compose up -d consumer >/dev/null 2>&1
+    # 5) producer / consumer 再起動（.env.test を確実に反映するため force-recreate）
+    echo "  producer / consumer を再起動しています...（20〜120秒程度かかる場合があります）"
+    local restart_started_at
+    restart_started_at=$(date +%s)
+    local restart_output
+    restart_output=$(docker compose up -d --force-recreate producer consumer 2>&1)
     if [ $? -eq 0 ]; then
-        echo "  consumer を再起動しました"
+        local restart_elapsed
+        restart_elapsed=$(( $(date +%s) - restart_started_at ))
+        echo "  producer / consumer を再起動しました: ${restart_elapsed}秒"
     else
-        echo "  警告: consumer の再起動に失敗しました（続行）" >&2
+        echo "  警告: producer / consumer の再起動に失敗しました（続行）" >&2
+        if [ -n "${restart_output}" ]; then
+            echo "  docker compose 出力: ${restart_output}" >&2
+        fi
     fi
 
     # 元のerrexit動作に戻す
