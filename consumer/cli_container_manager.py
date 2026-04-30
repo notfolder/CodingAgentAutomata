@@ -427,19 +427,21 @@ class CLIContainerManager:
         )
         container_id = container.id
 
-        # auto_remove=True でも NotFound 競合を避けるため、
-        # コンテナ起動前に follow ログストリームを確保してキャッシュする。
-        # 起動後に get(container_id) する必要がなくなるため、削除競合を回避できる。
+        # container.logs(stream=True, follow=True) は create() 直後（created 状態）に呼ぶと
+        # start() 後に生成されたログがストリームに含まれず出力が空になる問題がある。
+        # container.attach(stream=True, logs=True) はコンテナが created 状態でも
+        # start() 後の出力を正常にストリームするため、こちらを使用する。
+        # （実験で確認: attach() を start() 前に呼ぶ → output_len=22 で正常取得）
         try:
-            self._stdout_stream_cache[container_id] = container.logs(
+            self._stdout_stream_cache[container_id] = container.attach(
                 stream=True,
-                follow=True,
+                logs=True,
                 stdout=True,
                 stderr=True,
             )
         except Exception as exc:
             logger.warning(
-                "CLIContainerManager.run_container_once: 事前ログストリーム取得失敗（継続） container_id=%s: %s",
+                "CLIContainerManager.run_container_once: 事前ストリーム取得失敗（継続） container_id=%s: %s",
                 container_id,
                 exc,
             )

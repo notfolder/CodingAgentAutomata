@@ -8,6 +8,7 @@ GitLab 上に Draft MR を作成する。
 import json
 import logging
 import base64
+import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -383,18 +384,60 @@ class IssueToMRConverter:
             logger.debug("IssueToMRConverter: start_command=%r", start_command)
             output_chunks: list[str] = []
             stdout_stream = self._cli_container_manager.get_stdout_stream(container_id)
-            for chunk in stdout_stream:
-                if not chunk:
-                    continue
-                text = chunk.decode("utf-8", errors="replace")
-                output_chunks.append(text)
-                # F-3 CLI の出力を consumer の標準出力にリアルタイムで転送する
-                for line in text.splitlines():
-                    print(line, flush=True)
+            stream_done = threading.Event()
+
+            def _read_stream() -> None:
+                """ストリームを別スレッドで読み取る（ブロッキングI/Oをメインスレッドから分離）。"""
+                try:
+                    for chunk in stdout_stream:
+                        if not chunk:
+                            continue
+                        text = chunk.decode("utf-8", errors="replace")
+                        output_chunks.append(text)
+                        # F-3 CLI の出力を consumer の標準出力にリアルタイムで転送する
+                        for line in text.splitlines():
+                            print(line, flush=True)
+                except Exception as exc:
+                    logger.debug(
+                        "IssueToMRConverter: stdout ストリーム読み取り終了 container_id=%s: %s",
+                        container_id,
+                        exc,
+                    )
+                finally:
+                    stream_done.set()
+
+            stream_thread = threading.Thread(
+                target=_read_stream,
+                name=f"f3-cli-log-{task_uuid}",
+                daemon=True,
+            )
+            stream_thread.start()
+
             exit_code = self._cli_container_manager.wait_container_exit(
                 container_id,
                 self._settings.cli_exec_timeout_sec,
             )
+
+            # コンテナ終了後、ストリームの自然終了を最大5秒待機する
+            # 終わらない場合は close() を別スレッドで呼び出してタイムアウト付きで強制終了する
+            if not stream_done.wait(timeout=5):
+                logger.debug(
+                    "IssueToMRConverter: stdout ストリームが終了しないため強制 close します container_id=%s",
+                    container_id,
+                )
+                close_fn = getattr(stdout_stream, "close", None)
+                if callable(close_fn):
+                    close_thread = threading.Thread(target=close_fn, daemon=True)
+                    close_thread.start()
+                    close_thread.join(timeout=10)
+                    if close_thread.is_alive():
+                        logger.warning(
+                            "IssueToMRConverter: stdout ストリーム close がタイムアウトしました（無視）container_id=%s",
+                            container_id,
+                        )
+                # close 後にスレッドが終了するのを最大2秒待つ
+                stream_done.wait(timeout=2)
+
             cli_output: str = "".join(output_chunks)
             logger.debug(
                 "IssueToMRConverter: CLI 出力 exit_code=%s output=%r",

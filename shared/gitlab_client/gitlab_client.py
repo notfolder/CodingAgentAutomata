@@ -53,7 +53,8 @@ class GitLabClient:
             pat: GitLab Personal Access Token（api スコープ必須）
             api_url: GitLab インスタンスのベースURL（例: https://gitlab.com）
         """
-        self._gl = gitlab.Gitlab(url=api_url, private_token=pat)
+        # timeout=30: 接続・読み取りタイムアウトを30秒に設定（デフォルトは無制限のためハングを防ぐ）
+        self._gl = gitlab.Gitlab(url=api_url, private_token=pat, timeout=30)
         # 接続テストは行わず、実際のAPI呼び出し時に認証する
         logger.debug("GitLabClient initialized: url=%s", api_url)
 

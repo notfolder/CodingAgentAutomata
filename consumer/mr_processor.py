@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 from urllib.parse import urlparse
@@ -599,29 +600,57 @@ class MRProcessor:
                 log_thread.start()
 
                 def _close_stream_when_needed() -> None:
+                    # ストリームが自然終了するのを最大2秒待つ
                     if stream_done.wait(timeout=2):
                         return
-                    close_stream = getattr(stream, "close", None)
-                    if callable(close_stream):
-                        try:
-                            close_stream()
-                        except Exception as exc:
-                            logger.debug(
-                                "MRProcessor: stdout ストリーム close 中の例外を無視します container_id=%s: %s",
+                    # 自然終了しない場合はストリームを強制 close してブロック解除する
+                    # close() 自体がブロックすることがあるため、別スレッドで実行してタイムアウトを設ける
+                    close_fn = getattr(stream, "close", None)
+                    if callable(close_fn):
+                        close_thread = threading.Thread(target=close_fn, daemon=True)
+                        close_thread.start()
+                        close_thread.join(timeout=10)
+                        if close_thread.is_alive():
+                            logger.warning(
+                                "MRProcessor: stdout ストリーム close がタイムアウトしました（無視）container_id=%s",
                                 container_id,
-                                exc,
                             )
+                    # close 後にストリームスレッドが終了するのを最大2秒待つ
                     stream_done.wait(timeout=2)
 
                 try:
+                    wait_started = time.monotonic()
+                    logger.info(
+                        "MRProcessor: [CLI待機] wait_container_exit 開始 task_uuid=%s container_id=%s timeout_sec=%s",
+                        task_uuid,
+                        container_id,
+                        timeout_sec,
+                    )
                     cli_exit_code_holder[0] = await loop.run_in_executor(
                         None,
                         self._cli_container_manager.wait_container_exit,
                         container_id,
                         timeout_sec,
                     )
+                    logger.info(
+                        "MRProcessor: [CLI待機] wait_container_exit 完了 task_uuid=%s exit_code=%s elapsed=%.3fs",
+                        task_uuid,
+                        cli_exit_code_holder[0],
+                        time.monotonic() - wait_started,
+                    )
                 finally:
+                    close_started = time.monotonic()
+                    logger.info(
+                        "MRProcessor: [CLI待機] _close_stream_when_needed 開始 task_uuid=%s container_id=%s",
+                        task_uuid,
+                        container_id,
+                    )
                     await loop.run_in_executor(None, _close_stream_when_needed)
+                    logger.info(
+                        "MRProcessor: [CLI待機] _close_stream_when_needed 完了 task_uuid=%s elapsed=%.3fs",
+                        task_uuid,
+                        time.monotonic() - close_started,
+                    )
 
             async def _run_progress() -> None:
                 """進捗更新ループを起動する（ProgressManager._update_loop を直接実行）。"""
@@ -645,9 +674,23 @@ class MRProcessor:
                 # CLI タスクと monitor タスクの先着完了を待つ
                 # monitor_task が先に完了した場合（bot がアサインから外れた）は
                 # cli_task をキャンセルして強制終了処理へ進む
+                wait_any_started = time.monotonic()
+                logger.info(
+                    "MRProcessor: [並行待機] asyncio.wait 開始 task_uuid=%s timeout_sec=%s",
+                    task_uuid,
+                    timeout_sec,
+                )
                 done, _ = await asyncio.wait(
                     {cli_task, monitor_task},
                     timeout=timeout_sec,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                logger.info(
+                    "MRProcessor: [並行待機] asyncio.wait 完了 task_uuid=%s elapsed=%.3fs done_cli=%s done_monitor=%s",
+                    task_uuid,
+                    time.monotonic() - wait_any_started,
+                    cli_task in done,
+                    monitor_task in done,
                 )
 
                 if not done:
@@ -660,7 +703,9 @@ class MRProcessor:
                     bot_removed_flag[0] = True
                     cli_task.cancel()
                     try:
+                        logger.info("MRProcessor: [並行待機] await cli_task(キャンセル後) 開始 task_uuid=%s", task_uuid)
                         await cli_task
+                        logger.info("MRProcessor: [並行待機] await cli_task(キャンセル後) 完了 task_uuid=%s", task_uuid)
                     except (asyncio.CancelledError, Exception):
                         pass
                 else:
@@ -670,21 +715,35 @@ class MRProcessor:
                         bot_removed_flag[0] = True
                     else:
                         monitor_task.cancel()
+                    logger.info("MRProcessor: [並行待機] await cli_task(通常) 開始 task_uuid=%s", task_uuid)
                     await cli_task
+                    logger.info("MRProcessor: [並行待機] await cli_task(通常) 完了 task_uuid=%s", task_uuid)
 
                 # progress を停止
+                logger.info("MRProcessor: [タスク停止] progress_manager.stop() 開始 task_uuid=%s", task_uuid)
                 progress_manager.stop()
                 progress_task.cancel()
+                logger.info("MRProcessor: [タスク停止] await progress_task 開始 task_uuid=%s", task_uuid)
                 for t in [progress_task]:
                     try:
                         await t
                     except (asyncio.CancelledError, Exception):
                         pass
+                logger.info("MRProcessor: [タスク停止] await progress_task 完了 task_uuid=%s", task_uuid)
                 if not monitor_task.done():
+                    logger.info("MRProcessor: [タスク停止] await monitor_task 開始 task_uuid=%s", task_uuid)
                     try:
-                        await monitor_task
+                        await asyncio.wait_for(monitor_task, timeout=1)
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "MRProcessor: [タスク停止] monitor_task の停止待機がタイムアウトしたため後処理を継続します task_uuid=%s",
+                            task_uuid,
+                        )
                     except (asyncio.CancelledError, Exception):
                         pass
+                    logger.info("MRProcessor: [タスク停止] await monitor_task 完了 task_uuid=%s", task_uuid)
+                else:
+                    logger.info("MRProcessor: [タスク停止] monitor_task は既に完了 task_uuid=%s", task_uuid)
 
                 if is_shutdown_requested():
                     logger.info(
@@ -779,7 +838,9 @@ class MRProcessor:
                 raise RuntimeError(no_op_reason)
 
             # 最終進捗を flush
+            logger.info("MRProcessor: [後処理] progress_manager.flush() 開始 task_uuid=%s", task_uuid)
             await progress_manager.flush()
+            logger.info("MRProcessor: [後処理] progress_manager.flush() 完了 task_uuid=%s", task_uuid)
 
             # 完了コメント・ラベル更新
             done_labels: list[str] = [
@@ -791,21 +852,33 @@ class MRProcessor:
                 )
             ]
             done_labels.append(self._settings.gitlab_done_label)
+            logger.info(
+                "MRProcessor: [後処理] update_merge_request_labels() 開始 task_uuid=%s labels=%s",
+                task_uuid,
+                done_labels,
+            )
             self._gitlab_client.update_merge_request_labels(
                 project_id, mr_iid, list(set(done_labels))
             )
+            logger.info("MRProcessor: [後処理] update_merge_request_labels() 完了 task_uuid=%s", task_uuid)
+
+            logger.info("MRProcessor: [後処理] create_merge_request_note(✅) 開始 task_uuid=%s", task_uuid)
             self._gitlab_client.create_merge_request_note(
                 project_id, mr_iid, "✅ CLI 処理が完了しました。"
             )
+            logger.info("MRProcessor: [後処理] create_merge_request_note(✅) 完了 task_uuid=%s", task_uuid)
 
             # ==========================================
             # ステップ 11: CLILogMasker で PAT マスク後に cli_log を DB 保存
             # ==========================================
+            logger.info("MRProcessor: [後処理] CLILogMasker.mask() 開始 task_uuid=%s", task_uuid)
             from consumer.cli_log_masker import CLILogMasker
             masker = CLILogMasker()
             raw_log: str = "\n".join(cli_log_lines)
             masked_log: str = masker.mask(raw_log)
+            logger.info("MRProcessor: [後処理] CLILogMasker.mask() 完了 task_uuid=%s", task_uuid)
 
+            logger.info("MRProcessor: [後処理] _update_task_status(completed) 開始 task_uuid=%s", task_uuid)
             self._update_task_status(
                 task_uuid,
                 "completed",
