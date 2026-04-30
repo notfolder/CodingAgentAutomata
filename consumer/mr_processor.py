@@ -5,9 +5,12 @@ MR に対して CLI を実行し、進捗報告・アサイニー監視を並行
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 from urllib.parse import urlparse
@@ -15,8 +18,16 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from shared.models.db import Task, User
+from shared.shutdown_state import is_shutdown_requested
 
 logger = logging.getLogger(__name__)
+
+
+_NO_OP_PHRASES = [
+    "i don't have a specific task to work on",
+    "could you let me know what you'd like help with",
+    "just describe what you need and i'll get started",
+]
 
 
 class MRProcessor:
@@ -83,6 +94,90 @@ class MRProcessor:
                 task.model = model
             session.commit()
 
+    def _report_tty_wait_failure(
+        self,
+        task_uuid: str,
+        container_id: Optional[str],
+        project_id: int,
+        source_iid: int,
+        task_type: str,
+        detection_log: str = "",
+    ) -> None:
+        """
+        TTY 入力待機を検知した際に CLI を強制終了して失敗報告を行う。
+
+        T-04 要件: TTY 待機検知時の CLI 強制終了・失敗コメント投稿・ログ記録。
+
+        Args:
+            task_uuid: タスク UUID
+            container_id: CLI コンテナ ID（None の場合はコンテナ操作をスキップ）
+            project_id: GitLab プロジェクト ID
+            source_iid: Issue または MR の IID
+            task_type: タスク種別（"issue" または "merge_request"）
+            detection_log: TTY 検知ログ文字列
+        """
+        # CLI コンテナを強制停止する
+        if container_id:
+            try:
+                self._cli_container_manager.stop_container(container_id)
+                logger.info(
+                    "MRProcessor._report_tty_wait_failure: "
+                    "CLI コンテナを強制停止しました container_id=%s",
+                    container_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "MRProcessor._report_tty_wait_failure: "
+                    "CLI コンテナ停止中にエラーが発生しました（無視）: %s",
+                    exc,
+                )
+
+        # GitLab にエラーコメントを投稿する
+        error_msg = "TTY入力待機を検知したため強制終了しました"
+        comment_body = (
+            "⚠️ TTY 入力待機を検知したため CLI を強制終了しました。\n\n"
+            f"Task ID: `{task_uuid}`\n\n"
+            f"Issue/MR: #{source_iid}"
+        )
+        try:
+            if task_type == "merge_request":
+                self._gitlab_client.create_merge_request_note(
+                    project_id, source_iid, comment_body
+                )
+            else:
+                # Issue の場合は Issue ノートとして投稿する
+                self._gitlab_client.create_issue_note(
+                    project_id, source_iid, comment_body
+                )
+        except Exception as exc:
+            logger.warning(
+                "MRProcessor._report_tty_wait_failure: "
+                "GitLab コメント投稿に失敗しました（無視）: %s",
+                exc,
+            )
+
+        # タスクの error_message と cli_log を更新する
+        detection_log_entry = (
+            f"[TTY待機検知] TTY入力待機を検知したため強制終了しました\n{detection_log}"
+        )
+        with self._db_session_factory() as session:
+            from shared.models.db import Task as _Task
+
+            task: Optional[_Task] = (
+                session.query(_Task).filter(_Task.task_uuid == task_uuid).first()
+            )
+            if task:
+                task.error_message = error_msg
+                # 既存のcli_logに検知ログを追記する
+                existing_log = task.cli_log or ""
+                task.cli_log = existing_log + "\n" + detection_log_entry if existing_log else detection_log_entry
+                session.commit()
+                logger.info(
+                    "MRProcessor._report_tty_wait_failure: "
+                    "タスクのエラー情報を更新しました task_uuid=%s",
+                    task_uuid,
+                )
+
     def _build_mcp_config(self, user: User) -> str:
         mcp_config: dict = {}
         if user.system_mcp_enabled:
@@ -138,6 +233,96 @@ class MRProcessor:
                 override[key] = value
         return override
 
+    def _is_no_op_completion(
+        self,
+        initial_head_sha: str,
+        final_head_sha: str,
+        worktree_dirty: bool,
+        cli_log_lines: list[str],
+    ) -> tuple[bool, str]:
+        """
+        CLI が正常終了しても実作業をしていないケースを検出する。
+
+        判定条件:
+        - 開始時 HEAD と終了時 HEAD が同一
+        - 作業ツリーに未コミット変更がない
+        - 代表的な「具体的なタスクがない」応答がログに含まれる場合は理由を明示
+        """
+        cli_log_text = "\n".join(cli_log_lines).lower()
+        matched_no_op_phrase = next(
+            (phrase for phrase in _NO_OP_PHRASES if phrase in cli_log_text),
+            None,
+        )
+
+        # タスクを解釈できない旨の明示フレーズがログに含まれ、かつコミット・変更もない場合のみ
+        # no-op として失敗扱いにする。
+        # コミット・変更なしでも正常終了した場合は完了とみなす（レビューのみ・変更不要等の正当なケース）。
+        if matched_no_op_phrase and final_head_sha == initial_head_sha and not worktree_dirty:
+            return True, (
+                "CLI は正常終了しましたが、具体的な作業内容を解釈できない旨の応答のみで終了し、"
+                "コミットや変更がありませんでした。"
+            )
+
+        return False, ""
+
+    def _extract_log_marker(self, cli_log_lines: list[str], marker: str) -> Optional[str]:
+        """CLI ログから `__MARKER__:value` 形式の最終値を抽出する。"""
+        prefix = f"{marker}:"
+        for line in reversed(cli_log_lines):
+            if line.startswith(prefix):
+                return line[len(prefix):].strip()
+        return None
+
+    def _build_run_once_script(self, start_command: str) -> str:
+        """
+        run --rm 単発実行で使用する大スクリプトを返す。
+
+        環境変数:
+        - CLONE_URL
+        - BRANCH_NAME
+        - PROMPT_B64
+        - START_COMMAND
+        """
+        start_command_b64 = base64.b64encode(start_command.encode("utf-8")).decode("ascii")
+        return (
+            "set -eu\n"
+            "echo \"[STEP] スクリプト開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "trap 'cd /workspace 2>/dev/null && git push --set-upstream origin HEAD 2>/dev/null || true' TERM INT\n"
+            "echo \"[STEP] ワークスペースディレクトリ作成: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "mkdir -p /workspace\n"
+            "echo \"[STEP] git config user.name 設定: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "git config --global user.name \"${GIT_BOT_NAME}\"\n"
+            "echo \"[STEP] git config user.email 設定: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "git config --global user.email \"${GIT_BOT_EMAIL}\"\n"
+            "echo \"[STEP] git clone 開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "git clone \"${CLONE_URL}\" /workspace\n"
+            "echo \"[STEP] git clone 完了 / ディレクトリ移動: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "cd /workspace\n"
+            "echo \"[STEP] git checkout ブランチ: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "git checkout \"${BRANCH_NAME}\"\n"
+            "echo \"[STEP] initial HEAD 取得: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "initial_head=$(git rev-parse HEAD)\n"
+            "echo \"__INITIAL_HEAD__:${initial_head}\"\n"
+            "echo \"[STEP] プロンプトファイル作成: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "printf '%s' \"${PROMPT_B64}\" | base64 -d > /tmp/prompt.txt\n"
+            f"start_cmd=$(printf '%s' '{start_command_b64}' | base64 -d)\n"
+            "cli_exit=0\n"
+            "echo \"[STEP] CLI実行開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "sh -c \"${start_cmd}\" || cli_exit=$?\n"
+            "echo \"[STEP] CLI実行完了 exit=${cli_exit}: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "final_head=$(git rev-parse HEAD 2>/dev/null || echo '')\n"
+            "echo \"__FINAL_HEAD__:${final_head}\"\n"
+            "if [ -n \"$(git status --porcelain 2>/dev/null || true)\" ]; then\n"
+            "  echo \"__WORKTREE_DIRTY__:1\"\n"
+            "else\n"
+            "  echo \"__WORKTREE_DIRTY__:0\"\n"
+            "fi\n"
+            "echo \"[STEP] git push 開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "git push --set-upstream origin HEAD 2>/dev/null || true\n"
+            "echo \"[STEP] git push 完了: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "exit \"${cli_exit}\"\n"
+        )
+
     async def _monitor_assignees(self, project_id: int, mr_iid: int) -> bool:
         """
         PROGRESS_REPORT_INTERVAL_SEC 秒ごとに MR のアサイニーを確認して
@@ -155,6 +340,8 @@ class MRProcessor:
         loop = asyncio.get_event_loop()
 
         while True:
+            if is_shutdown_requested():
+                return False
             await asyncio.sleep(interval)
             try:
                 mr: Optional[dict] = await loop.run_in_executor(
@@ -177,6 +364,8 @@ class MRProcessor:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                if is_shutdown_requested():
+                    return False
                 logger.warning(
                     "MRProcessor._monitor_assignees: アサイニー確認失敗（無視）: %s", exc
                 )
@@ -244,7 +433,7 @@ class MRProcessor:
                 # フォールバック: 渡された username を使用
                 user = self._get_user(username)
             if user is None:
-                error_msg = f"ユーザーがシステムに登録されていません。"
+                error_msg = "ユーザーがシステムに登録されていません。"
                 self._gitlab_client.create_merge_request_note(
                     project_id,
                     mr_iid,
@@ -312,7 +501,7 @@ class MRProcessor:
             )
 
             # ==========================================
-            # ステップ 5: CLI コンテナ起動・git clone + checkout
+            # ステップ 5: run --rm 単発実行用の準備
             # ==========================================
             from shared.models.db import CLIAdapter
             adapter: Optional[CLIAdapter] = self._cli_adapter_resolver.resolve(cli_id_used)
@@ -333,51 +522,19 @@ class MRProcessor:
             start_command: str = self._cli_adapter_resolver.build_start_command(
                 adapter, env_info
             )
-
-            # コンテナを起動（初期コマンドは sleep infinity でコンテナを常時起動状態に保つ）
-            container_name: str = f"cli-exec-{cli_id_used}-{task_uuid}"
-            container_id = self._cli_container_manager.start_container(
-                container_name=container_name,
-                image=adapter.container_image,
-                env_vars=env_vars,
-                command="sleep infinity",
-            )
-            logger.info("MRProcessor: コンテナ起動 container_id=%s", container_id)
-
-            # PAT を埋め込んだ URL で git clone
             clone_url: str = self._build_clone_url(
                 project_info or {}, self._settings.gitlab_pat
             )
-            clone_exit, clone_out = self._cli_container_manager.exec_command(
-                container_id,
-                f"git clone {clone_url} /workspace",
-            )
-            if clone_exit != 0:
-                raise ValueError(f"git clone 失敗（exit={clone_exit}）: {clone_out}")
+            run_script: str = self._build_run_once_script(start_command)
 
-            # ブランチをチェックアウト
-            checkout_exit, checkout_out = self._cli_container_manager.exec_command(
-                container_id,
-                f"cd /workspace && git checkout {branch_name}",
-            )
-            if checkout_exit != 0:
-                raise ValueError(
-                    f"git checkout 失敗（exit={checkout_exit}）: {checkout_out}"
-                )
-            logger.info("MRProcessor: git clone + checkout 完了 branch=%s", branch_name)
-
-            # ==========================================
-            # ステップ 5.5: プロンプトをコンテナ内ファイルに書き込み
-            # ==========================================
-            # コマンドライン引数の長さ制限を回避するため、プロンプトを
-            # コンテナ内の /tmp/prompt.txt にファイルとして書き込む。
-            # start_command_template は cat /tmp/prompt.txt でこのファイルを読み取る。
-            self._cli_container_manager.write_file(
-                container_id, "/tmp/prompt.txt", prompt
-            )
-            logger.debug(
-                "MRProcessor: プロンプトファイルを書き込みました size=%d", len(prompt)
-            )
+            run_env_vars: dict[str, str] = {
+                **env_vars,
+                "CLONE_URL": clone_url,
+                "BRANCH_NAME": branch_name,
+                "PROMPT_B64": base64.b64encode(prompt.encode("utf-8")).decode("ascii"),
+                "GIT_BOT_NAME": self._settings.gitlab_bot_name,
+                "GIT_BOT_EMAIL": f"{self._settings.gitlab_bot_name}@users.noreply.gitlab.local",
+            }
 
             # ==========================================
             # ステップ 6: MR に処理開始コメント投稿
@@ -401,36 +558,99 @@ class MRProcessor:
             cli_exit_code_holder: list[int] = [-1]
 
             async def _run_cli() -> None:
-                """CLI コマンドをコンテナ内で実行し、stdout ストリームを ProgressManager に流す。"""
-                nonlocal cli_log_lines
-                import docker as _docker
+                """run --rm 単発コンテナを起動し、終了待ちと stdout 追従を分離して実行する。"""
+                nonlocal cli_log_lines, container_id
 
-                def _exec_stream():
-                    """同期的に exec_run でストリームを取得する。"""
-                    c = self._cli_container_manager._client.containers.get(container_id)
-                    result = c.exec_run(
-                        cmd=["/bin/sh", "-c", f"cd /workspace && {start_command}"],
-                        stdout=True,
-                        stderr=True,
-                        stream=True,
-                        demux=False,
+                container_name: str = f"cli-exec-{cli_id_used}-{task_uuid}"
+                container_id = self._cli_container_manager.run_container_once(
+                    container_name=container_name,
+                    image=adapter.container_image,
+                    env_vars=run_env_vars,
+                    command=["/bin/sh", "-c", run_script],
+                )
+                logger.info("MRProcessor: run_once コンテナ起動 container_id=%s", container_id)
+
+                stream = self._cli_container_manager.get_stdout_stream(container_id)
+                stream_done = threading.Event()
+
+                def _stream_logs() -> None:
+                    try:
+                        for chunk in stream:
+                            if not chunk:
+                                continue
+                            text = chunk.decode("utf-8", errors="replace")
+                            for line in text.splitlines():
+                                cli_log_lines.append(line)
+                                progress_manager.append_line(line)
+                                print(line, flush=True)
+                    except Exception as exc:
+                        logger.debug(
+                            "MRProcessor: stdout ストリームを終了します container_id=%s: %s",
+                            container_id,
+                            exc,
+                        )
+                    finally:
+                        stream_done.set()
+
+                log_thread = threading.Thread(
+                    target=_stream_logs,
+                    name=f"mr-cli-log-{task_uuid}",
+                    daemon=True,
+                )
+                log_thread.start()
+
+                def _close_stream_when_needed() -> None:
+                    # ストリームが自然終了するのを最大2秒待つ
+                    if stream_done.wait(timeout=2):
+                        return
+                    # 自然終了しない場合はストリームを強制 close してブロック解除する
+                    # close() 自体がブロックすることがあるため、別スレッドで実行してタイムアウトを設ける
+                    close_fn = getattr(stream, "close", None)
+                    if callable(close_fn):
+                        close_thread = threading.Thread(target=close_fn, daemon=True)
+                        close_thread.start()
+                        close_thread.join(timeout=10)
+                        if close_thread.is_alive():
+                            logger.warning(
+                                "MRProcessor: stdout ストリーム close がタイムアウトしました（無視）container_id=%s",
+                                container_id,
+                            )
+                    # close 後にストリームスレッドが終了するのを最大2秒待つ
+                    stream_done.wait(timeout=2)
+
+                try:
+                    wait_started = time.monotonic()
+                    logger.info(
+                        "MRProcessor: [CLI待機] wait_container_exit 開始 task_uuid=%s container_id=%s timeout_sec=%s",
+                        task_uuid,
+                        container_id,
+                        timeout_sec,
                     )
-                    return result
-
-                exec_result = await loop.run_in_executor(None, _exec_stream)
-
-                # ストリームから行を読み取ってバッファに蓄積
-                def _read_lines():
-                    for chunk in exec_result.output:
-                        if not chunk:
-                            continue
-                        text = chunk.decode("utf-8", errors="replace")
-                        for line in text.splitlines():
-                            cli_log_lines.append(line)
-                            progress_manager.append_line(line)
-
-                await loop.run_in_executor(None, _read_lines)
-                cli_exit_code_holder[0] = exec_result.exit_code or 0
+                    cli_exit_code_holder[0] = await loop.run_in_executor(
+                        None,
+                        self._cli_container_manager.wait_container_exit,
+                        container_id,
+                        timeout_sec,
+                    )
+                    logger.info(
+                        "MRProcessor: [CLI待機] wait_container_exit 完了 task_uuid=%s exit_code=%s elapsed=%.3fs",
+                        task_uuid,
+                        cli_exit_code_holder[0],
+                        time.monotonic() - wait_started,
+                    )
+                finally:
+                    close_started = time.monotonic()
+                    logger.info(
+                        "MRProcessor: [CLI待機] _close_stream_when_needed 開始 task_uuid=%s container_id=%s",
+                        task_uuid,
+                        container_id,
+                    )
+                    await loop.run_in_executor(None, _close_stream_when_needed)
+                    logger.info(
+                        "MRProcessor: [CLI待機] _close_stream_when_needed 完了 task_uuid=%s elapsed=%.3fs",
+                        task_uuid,
+                        time.monotonic() - close_started,
+                    )
 
             async def _run_progress() -> None:
                 """進捗更新ループを起動する（ProgressManager._update_loop を直接実行）。"""
@@ -454,9 +674,23 @@ class MRProcessor:
                 # CLI タスクと monitor タスクの先着完了を待つ
                 # monitor_task が先に完了した場合（bot がアサインから外れた）は
                 # cli_task をキャンセルして強制終了処理へ進む
+                wait_any_started = time.monotonic()
+                logger.info(
+                    "MRProcessor: [並行待機] asyncio.wait 開始 task_uuid=%s timeout_sec=%s",
+                    task_uuid,
+                    timeout_sec,
+                )
                 done, _ = await asyncio.wait(
                     {cli_task, monitor_task},
                     timeout=timeout_sec,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                logger.info(
+                    "MRProcessor: [並行待機] asyncio.wait 完了 task_uuid=%s elapsed=%.3fs done_cli=%s done_monitor=%s",
+                    task_uuid,
+                    time.monotonic() - wait_any_started,
+                    cli_task in done,
+                    monitor_task in done,
                 )
 
                 if not done:
@@ -469,7 +703,9 @@ class MRProcessor:
                     bot_removed_flag[0] = True
                     cli_task.cancel()
                     try:
+                        logger.info("MRProcessor: [並行待機] await cli_task(キャンセル後) 開始 task_uuid=%s", task_uuid)
                         await cli_task
+                        logger.info("MRProcessor: [並行待機] await cli_task(キャンセル後) 完了 task_uuid=%s", task_uuid)
                     except (asyncio.CancelledError, Exception):
                         pass
                 else:
@@ -479,20 +715,54 @@ class MRProcessor:
                         bot_removed_flag[0] = True
                     else:
                         monitor_task.cancel()
+                    logger.info("MRProcessor: [並行待機] await cli_task(通常) 開始 task_uuid=%s", task_uuid)
+                    await cli_task
+                    logger.info("MRProcessor: [並行待機] await cli_task(通常) 完了 task_uuid=%s", task_uuid)
 
                 # progress を停止
+                logger.info("MRProcessor: [タスク停止] progress_manager.stop() 開始 task_uuid=%s", task_uuid)
                 progress_manager.stop()
                 progress_task.cancel()
+                logger.info("MRProcessor: [タスク停止] await progress_task 開始 task_uuid=%s", task_uuid)
                 for t in [progress_task]:
                     try:
                         await t
                     except (asyncio.CancelledError, Exception):
                         pass
+                logger.info("MRProcessor: [タスク停止] await progress_task 完了 task_uuid=%s", task_uuid)
                 if not monitor_task.done():
+                    logger.info("MRProcessor: [タスク停止] await monitor_task 開始 task_uuid=%s", task_uuid)
                     try:
-                        await monitor_task
+                        await asyncio.wait_for(monitor_task, timeout=1)
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "MRProcessor: [タスク停止] monitor_task の停止待機がタイムアウトしたため後処理を継続します task_uuid=%s",
+                            task_uuid,
+                        )
                     except (asyncio.CancelledError, Exception):
                         pass
+                    logger.info("MRProcessor: [タスク停止] await monitor_task 完了 task_uuid=%s", task_uuid)
+                else:
+                    logger.info("MRProcessor: [タスク停止] monitor_task は既に完了 task_uuid=%s", task_uuid)
+
+                if is_shutdown_requested():
+                    logger.info(
+                        "MRProcessor: シャットダウン要求を検知したため GitLab 後処理を省略します task_uuid=%s",
+                        task_uuid,
+                    )
+                    from consumer.cli_log_masker import CLILogMasker
+
+                    masker = CLILogMasker()
+                    raw_log: str = "\n".join(cli_log_lines)
+                    masked_log: str = masker.mask(raw_log)
+                    self._update_task_status(
+                        task_uuid,
+                        "completed",
+                        cli_log=masked_log,
+                        cli_type=cli_id_used,
+                        model=model_used,
+                    )
+                    return
 
             except asyncio.TimeoutError:
                 # ==========================================
@@ -509,48 +779,41 @@ class MRProcessor:
                     except (asyncio.CancelledError, Exception):
                         pass
 
-                # タイムアウト前に git push を試みる
-                try:
-                    self._cli_container_manager.exec_command(
-                        container_id, "cd /workspace && git push --set-upstream origin HEAD"
-                    )
-                except Exception:
-                    pass
+                if container_id:
+                    self._cli_container_manager.stop_container(container_id)
 
                 timeout_msg = f"CLI 実行がタイムアウトしました（{timeout_sec}秒）。"
-                self._gitlab_client.create_merge_request_note(
-                    project_id,
-                    mr_iid,
-                    f"⏰ {timeout_msg}\n\nTask ID: `{task_uuid}`",
-                )
+                if not is_shutdown_requested():
+                    self._gitlab_client.create_merge_request_note(
+                        project_id,
+                        mr_iid,
+                        f"⏰ {timeout_msg}\n\nTask ID: `{task_uuid}`",
+                    )
                 raise TimeoutError(timeout_msg)
+            except Exception:
+                progress_manager.stop()
+                progress_task.cancel()
+                monitor_task.cancel()
+                for t in [progress_task, monitor_task]:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                raise
 
             # ==========================================
             # ステップ 8: bot アサイン解除検知時の処理
             # ==========================================
             if bot_removed_flag[0]:
                 logger.info("MRProcessor: bot がアサイニーから外れました。CLI を強制終了します。")
-                # CLI プロセスを強制終了
-                process_name: str = cli_id_used or "cli"
-                pid: Optional[int] = self._cli_container_manager.get_container_pid(
-                    container_id, process_name
-                )
-                if pid:
-                    self._cli_container_manager.kill_process(container_id, pid)
+                if container_id:
+                    self._cli_container_manager.stop_container(container_id)
 
-                # git push を実行（失敗は無視）
-                try:
-                    self._cli_container_manager.exec_command(
-                        container_id,
-                        "cd /workspace && git push --set-upstream origin HEAD",
+                unassign_msg = "🛑 強制終了: bot がアサイニーから外されたため、CLI 処理を中断しました。"
+                if not is_shutdown_requested():
+                    self._gitlab_client.create_merge_request_note(
+                        project_id, mr_iid, unassign_msg
                     )
-                except Exception:
-                    pass
-
-                unassign_msg = "🛑 強制終了: bot がアサイニーから外されたため、CLI 処理を中断しました。変更内容を push しました。"
-                self._gitlab_client.create_merge_request_note(
-                    project_id, mr_iid, unassign_msg
-                )
                 raise RuntimeError("bot がアサイニーから外されました。")
 
             # ==========================================
@@ -560,8 +823,24 @@ class MRProcessor:
             if exit_code != 0:
                 raise RuntimeError(f"CLI が非ゼロ終了コードで終了しました: exit_code={exit_code}")
 
+            initial_head_sha = self._extract_log_marker(cli_log_lines, "__INITIAL_HEAD__") or ""
+            final_head_sha = self._extract_log_marker(cli_log_lines, "__FINAL_HEAD__") or ""
+            worktree_dirty = (
+                self._extract_log_marker(cli_log_lines, "__WORKTREE_DIRTY__") == "1"
+            )
+            no_op_detected, no_op_reason = self._is_no_op_completion(
+                initial_head_sha,
+                final_head_sha,
+                worktree_dirty,
+                cli_log_lines,
+            )
+            if no_op_detected:
+                raise RuntimeError(no_op_reason)
+
             # 最終進捗を flush
+            logger.info("MRProcessor: [後処理] progress_manager.flush() 開始 task_uuid=%s", task_uuid)
             await progress_manager.flush()
+            logger.info("MRProcessor: [後処理] progress_manager.flush() 完了 task_uuid=%s", task_uuid)
 
             # 完了コメント・ラベル更新
             done_labels: list[str] = [
@@ -573,21 +852,33 @@ class MRProcessor:
                 )
             ]
             done_labels.append(self._settings.gitlab_done_label)
+            logger.info(
+                "MRProcessor: [後処理] update_merge_request_labels() 開始 task_uuid=%s labels=%s",
+                task_uuid,
+                done_labels,
+            )
             self._gitlab_client.update_merge_request_labels(
                 project_id, mr_iid, list(set(done_labels))
             )
+            logger.info("MRProcessor: [後処理] update_merge_request_labels() 完了 task_uuid=%s", task_uuid)
+
+            logger.info("MRProcessor: [後処理] create_merge_request_note(✅) 開始 task_uuid=%s", task_uuid)
             self._gitlab_client.create_merge_request_note(
                 project_id, mr_iid, "✅ CLI 処理が完了しました。"
             )
+            logger.info("MRProcessor: [後処理] create_merge_request_note(✅) 完了 task_uuid=%s", task_uuid)
 
             # ==========================================
             # ステップ 11: CLILogMasker で PAT マスク後に cli_log を DB 保存
             # ==========================================
+            logger.info("MRProcessor: [後処理] CLILogMasker.mask() 開始 task_uuid=%s", task_uuid)
             from consumer.cli_log_masker import CLILogMasker
             masker = CLILogMasker()
             raw_log: str = "\n".join(cli_log_lines)
             masked_log: str = masker.mask(raw_log)
+            logger.info("MRProcessor: [後処理] CLILogMasker.mask() 完了 task_uuid=%s", task_uuid)
 
+            logger.info("MRProcessor: [後処理] _update_task_status(completed) 開始 task_uuid=%s", task_uuid)
             self._update_task_status(
                 task_uuid,
                 "completed",
@@ -606,31 +897,32 @@ class MRProcessor:
                 exc_info=True,
             )
             # GitLab MR にエラーコメント投稿
-            try:
-                self._gitlab_client.create_merge_request_note(
-                    project_id,
-                    mr_iid,
-                    (
-                        "❌ F-4 処理中にエラーが発生しました。\n\n"
-                        f"Task ID: `{task_uuid}`\n\n"
-                        f"```\n{error_msg}\n```"
-                    ),
-                )
-                # 処理中ラベルを削除
-                mr_current: Optional[dict] = self._gitlab_client.get_merge_request(
-                    project_id, mr_iid
-                )
-                if mr_current:
-                    restore_labels: list[str] = [
-                        lbl
-                        for lbl in mr_current.get("labels", [])
-                        if lbl != self._settings.gitlab_processing_label
-                    ]
-                    self._gitlab_client.update_merge_request_labels(
-                        project_id, mr_iid, restore_labels
+            if not is_shutdown_requested():
+                try:
+                    self._gitlab_client.create_merge_request_note(
+                        project_id,
+                        mr_iid,
+                        (
+                            "❌ F-4 処理中にエラーが発生しました。\n\n"
+                            f"Task ID: `{task_uuid}`\n\n"
+                            f"```\n{error_msg}\n```"
+                        ),
                     )
-            except Exception as gitlab_exc:
-                logger.warning("MRProcessor: GitLab エラーコメント投稿失敗（無視）: %s", gitlab_exc)
+                    # 処理中ラベルを削除
+                    mr_current: Optional[dict] = self._gitlab_client.get_merge_request(
+                        project_id, mr_iid
+                    )
+                    if mr_current:
+                        restore_labels: list[str] = [
+                            lbl
+                            for lbl in mr_current.get("labels", [])
+                            if lbl != self._settings.gitlab_processing_label
+                        ]
+                        self._gitlab_client.update_merge_request_labels(
+                            project_id, mr_iid, restore_labels
+                        )
+                except Exception as gitlab_exc:
+                    logger.warning("MRProcessor: GitLab エラーコメント投稿失敗（無視）: %s", gitlab_exc)
 
             # PAT マスク処理してログを保存
             try:
@@ -651,14 +943,7 @@ class MRProcessor:
             )
 
         finally:
-            # コンテナ即時破棄
+            # コンテナ即時破棄（run --rm のため通常は自動削除済みだが、残留時のみベストエフォートで停止する）
             if container_id:
-                try:
-                    self._cli_container_manager.exec_command(
-                        container_id,
-                        "cd /workspace && git push --set-upstream origin HEAD 2>/dev/null || true",
-                    )
-                except Exception:
-                    pass
                 self._cli_container_manager.stop_container(container_id)
                 logger.info("MRProcessor: コンテナを破棄しました container_id=%s", container_id)

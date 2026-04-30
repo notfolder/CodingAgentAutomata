@@ -57,6 +57,26 @@ class CLIAdapterResolver:
             session.expunge(adapter)
             return adapter
 
+    def fetch_all_container_images(self) -> list[str]:
+        """
+        DB に登録されている全 CLI アダプタの container_image を重複なく返す。
+
+        consumer 起動時のウォームアップ対象イメージ取得に使用する。
+        DB 接続エラーが発生した場合は空リストを返す。
+
+        Returns:
+            list[str]: container_image 文字列のリスト
+        """
+        try:
+            with self._db_session_factory() as session:
+                rows = session.query(CLIAdapter.container_image).all()
+                return list({row.container_image for row in rows})
+        except Exception as exc:
+            logger.warning(
+                "CLIAdapterResolver.fetch_all_container_images: 取得失敗（空リストを返します）: %s", exc
+            )
+            return []
+
     def build_env_vars(
         self,
         adapter: CLIAdapter,

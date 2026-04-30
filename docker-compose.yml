@@ -28,10 +28,10 @@ services:
       - codingagent_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-db}"]
-      interval: 5s
-      timeout: 5s
+      interval: 3s
+      timeout: 3s
       retries: 10
-      start_period: 10s
+      start_period: 5s
 
   # -------------------------------------------------------
   # PostgreSQL（LiteLLM 専用）
@@ -50,10 +50,10 @@ services:
       - codingagent_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U litellm -d litellm_db"]
-      interval: 5s
-      timeout: 5s
+      interval: 3s
+      timeout: 3s
       retries: 10
-      start_period: 10s
+      start_period: 5s
 
   # -------------------------------------------------------
   # RabbitMQ メッセージキュー（管理UIあり）
@@ -153,8 +153,8 @@ services:
     environment:
       # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
       GITLAB_API_URL: http://gitlab:8929
-      # CLI 実行タイムアウトをテスト環境向けに短縮（デフォルト 3 時間 → 90 秒）
-      CLI_EXEC_TIMEOUT_SEC: "90"
+      # DinD コンテナ起動の遅延（T-30 後等の高負荷時）に対応するため Docker クライアントタイムアウトを延長
+      DOCKER_CLIENT_TIMEOUT_SEC: "240"
     depends_on:
       - postgresql
       - rabbitmq
@@ -200,6 +200,8 @@ services:
     environment:
       GITLAB_OMNIBUS_CONFIG: |
         external_url 'http://localhost:8929'
+        # テスト用途では不要な監視系機能を停止して起動時間とリソース消費を削減
+        prometheus_monitoring['enable'] = false
         gitlab_rails['allow_local_requests_from_web_hooks_and_services'] = true
         gitlab_rails['outbound_local_requests_allowlist'] = ['producer']
     ports:
@@ -306,6 +308,11 @@ services:
       DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
       DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
       DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
+      # 管理者・テストユーザー認証情報
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123456}
+      TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
+      # Webhook エンドポイント（グループWebhookテスト用）
+      WEBHOOK_URL: http://producer:8080/webhook
     volumes:
       - ./e2e:/e2e
     networks:
@@ -313,6 +320,7 @@ services:
     depends_on:
       - frontend
       - mock_llm
+      - producer
 
   # -------------------------------------------------------
   # Playwright E2Eテスト実行コンテナ（実LLMモード）
@@ -340,6 +348,11 @@ services:
       DEFAULT_CLAUDE_MODEL: ${DEFAULT_CLAUDE_MODEL:-claude-haiku-4-5-20251001}
       DEFAULT_OPENAI_MODEL: ${DEFAULT_OPENAI_MODEL:-gpt-4o-mini}
       DEFAULT_OPENAI_MODEL_LITELLM: ${DEFAULT_OPENAI_MODEL_LITELLM:-openai/gpt-4o-mini}
+      # 管理者・テストユーザー認証情報
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123456}
+      TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
+      # Webhook エンドポイント（グループWebhookテスト用）
+      WEBHOOK_URL: http://producer:8080/webhook
     volumes:
       - ./e2e:/e2e
     networks:
@@ -347,6 +360,7 @@ services:
     depends_on:
       - frontend
       - litellm_real
+      - producer
 
   # -------------------------------------------------------
   # Claude CLI exec イメージビルド専用サービス

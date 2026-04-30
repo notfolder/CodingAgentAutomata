@@ -81,6 +81,14 @@ class WebhookServer:
         token = request.headers.get("X-Gitlab-Token", "")
         expected = self._settings.gitlab_webhook_secret
 
+        # X-Gitlab-Event ヘッダーを取得してログに記録する（Group Webhook 標準化）
+        gitlab_event = request.headers.get("X-Gitlab-Event", "")
+        logger.info(
+            "WebhookServer: Webhook 受信 event=%s, remote=%s",
+            gitlab_event,
+            request.remote,
+        )
+
         if expected and token != expected:
             # シークレットが設定されている場合のみ検証する
             logger.warning(
@@ -93,12 +101,20 @@ class WebhookServer:
         try:
             payload: dict = await request.json()
         except Exception as exc:
-            logger.warning("WebhookServer: JSON parse error: %s", exc)
-            return web.Response(status=400, text="Bad Request: invalid JSON")
+            # T-08 要件: ペイロード不正の場合は WARNING ログを記録して 200 を返す
+            # （GitLab が再送しないよう 200 を返すのが一般的なプラクティス）
+            logger.warning(
+                "WebhookServer: JSON parse error from %s: %s",
+                request.remote,
+                exc,
+            )
+            return web.Response(status=200, text="OK")
 
         # イベントハンドラーに処理を委譲する
+        # X-Idempotency-Key ヘッダーを渡して重複受信を抑止する
+        idempotency_key = request.headers.get("X-Idempotency-Key")
         try:
-            self._event_handler.handle_event(payload)
+            self._event_handler.handle_event(payload, idempotency_key=idempotency_key)
         except Exception as exc:
             # イベント処理エラーは 500 を返さず、ログに記録して 200 を返す
             # （GitLab が再送しないよう 200 を返すのが一般的なプラクティス）

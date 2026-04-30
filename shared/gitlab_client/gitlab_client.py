@@ -12,6 +12,8 @@ from typing import Optional
 import gitlab
 import gitlab.exceptions
 
+from shared.shutdown_state import is_shutdown_requested
+
 # ロガーを設定
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,18 @@ _MAX_RETRIES = 3          # 5xx / 接続エラーの最大リトライ回数
 _RATE_LIMIT_MAX_RETRIES = 5  # 429 レートリミット時の最大リトライ回数
 _BASE_BACKOFF_SEC = 1.0   # バックオフ基底秒数
 _MAX_BACKOFF_SEC = 60.0   # バックオフ最大待機秒数
+
+
+def _sleep_with_shutdown_check(wait_sec: float) -> bool:
+    """待機中にシャットダウン要求が来たら即座に中断する。"""
+    remaining = wait_sec
+    while remaining > 0:
+        if is_shutdown_requested():
+            return False
+        sleep_chunk = min(0.2, remaining)
+        time.sleep(sleep_chunk)
+        remaining -= sleep_chunk
+    return not is_shutdown_requested()
 
 
 class GitLabClient:
@@ -39,7 +53,8 @@ class GitLabClient:
             pat: GitLab Personal Access Token（api スコープ必須）
             api_url: GitLab インスタンスのベースURL（例: https://gitlab.com）
         """
-        self._gl = gitlab.Gitlab(url=api_url, private_token=pat)
+        # timeout=30: 接続・読み取りタイムアウトを30秒に設定（デフォルトは無制限のためハングを防ぐ）
+        self._gl = gitlab.Gitlab(url=api_url, private_token=pat, timeout=30)
         # 接続テストは行わず、実際のAPI呼び出し時に認証する
         logger.debug("GitLabClient initialized: url=%s", api_url)
 
@@ -69,6 +84,11 @@ class GitLabClient:
         rate_limit_count: int = 0
 
         for attempt in range(_MAX_RETRIES):
+            if is_shutdown_requested():
+                logger.info("GitLab call aborted due to shutdown request")
+                if last_exc:
+                    raise last_exc
+                raise RuntimeError("シャットダウン要求のため GitLab API 呼び出しを中止しました。")
             try:
                 return func(*args, **kwargs)
             except gitlab.exceptions.GitlabHttpError as exc:
@@ -91,7 +111,9 @@ class GitLabClient:
                     wait = min(_BASE_BACKOFF_SEC * (2 ** rate_limit_count), _MAX_BACKOFF_SEC)
                     logger.warning("GitLab rate limit (429), retry %d/%d in %.1fs",
                                    rate_limit_count, _RATE_LIMIT_MAX_RETRIES, wait)
-                    time.sleep(wait)
+                    if not _sleep_with_shutdown_check(wait):
+                        logger.info("GitLab rate limit retry aborted due to shutdown request")
+                        raise exc
                     last_exc = exc
                     # 429 はメインループのカウントを消費しない（continue でスキップ）
                     continue
@@ -100,7 +122,9 @@ class GitLabClient:
                     wait = min(_BASE_BACKOFF_SEC * (2 ** attempt), _MAX_BACKOFF_SEC)
                     logger.warning("GitLab server error (%d), retry %d/%d in %.1fs",
                                    status, attempt + 1, _MAX_RETRIES, wait)
-                    time.sleep(wait)
+                    if not _sleep_with_shutdown_check(wait):
+                        logger.info("GitLab server error retry aborted due to shutdown request")
+                        raise exc
                     last_exc = exc
                     continue
                 # その他の HTTPエラーは即例外送出
@@ -109,7 +133,9 @@ class GitLabClient:
                 wait = min(_BASE_BACKOFF_SEC * (2 ** attempt), _MAX_BACKOFF_SEC)
                 logger.warning("GitLab request error: %s, retry %d/%d in %.1fs",
                                exc, attempt + 1, _MAX_RETRIES, wait)
-                time.sleep(wait)
+                if not _sleep_with_shutdown_check(wait):
+                    logger.info("GitLab request retry aborted due to shutdown request")
+                    raise exc
                 last_exc = exc
 
         # リトライ上限到達
@@ -246,6 +272,38 @@ class GitLabClient:
         result = self._call_with_retry(_call)
         return result if result is not None else []
 
+    def list_assigned_issues_all_projects(
+        self,
+        assignee_username: str,
+        labels: Optional[list[str]] = None,
+        state: str = "opened",
+    ) -> list[dict]:
+        """
+        全プロジェクト横断で、指定ユーザーにアサインされた Issue 一覧を取得する。
+
+        Args:
+            assignee_username: アサイニーのユーザー名
+            labels: フィルタするラベルのリスト（省略可）
+            state: Issueのステータス（"opened" / "closed" / "all"）
+
+        Returns:
+            Issue属性辞書のリスト
+        """
+
+        def _call():
+            kwargs: dict = {
+                "state": state,
+                "scope": "all",
+                "assignee_username": assignee_username,
+            }
+            if labels:
+                kwargs["labels"] = labels
+            issues = self._list_all_pages(self._gl.issues, **kwargs)
+            return [i.attributes for i in issues]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
+
     def get_issue_notes(self, project_id: int, iid: int) -> list[dict]:
         """
         Issue の全コメント（Note）一覧を取得する。
@@ -297,6 +355,38 @@ class GitLabClient:
             if labels:
                 kwargs["labels"] = labels
             mrs = self._list_all_pages(project.mergerequests, **kwargs)
+            return [mr.attributes for mr in mrs]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
+
+    def list_assigned_merge_requests_all_projects(
+        self,
+        assignee_username: str,
+        labels: Optional[list[str]] = None,
+        state: str = "opened",
+    ) -> list[dict]:
+        """
+        全プロジェクト横断で、指定ユーザーにアサインされた MR 一覧を取得する。
+
+        Args:
+            assignee_username: アサイニーのユーザー名
+            labels: フィルタするラベルのリスト（省略可）
+            state: MRのステータス（"opened" / "closed" / "merged" / "all"）
+
+        Returns:
+            MR属性辞書のリスト
+        """
+
+        def _call():
+            kwargs: dict = {
+                "state": state,
+                "scope": "all",
+                "assignee_username": assignee_username,
+            }
+            if labels:
+                kwargs["labels"] = labels
+            mrs = self._list_all_pages(self._gl.mergerequests, **kwargs)
             return [mr.attributes for mr in mrs]
 
         result = self._call_with_retry(_call)
@@ -522,6 +612,30 @@ class GitLabClient:
 
         result = self._call_with_retry(_call)
         return bool(result)
+
+    def list_branches(self, project_id: int, max_count: int = 100) -> list[str]:
+        """
+        指定プロジェクトの既存ブランチ名一覧を取得する。
+
+        Args:
+            project_id: GitLabプロジェクトID
+            max_count: 取得する最大件数（デフォルト: 100）
+
+        Returns:
+            ブランチ名のリスト
+        """
+        if max_count <= 0:
+            return []
+
+        def _call():
+            project = self._gl.projects.get(project_id)
+            # 全件取得するとプロンプトサイズが大きくなりやすいため、最大件数で打ち切る
+            branches = project.branches.list(page=1, per_page=max_count)
+            names = [b.attributes.get("name", "") for b in branches]
+            return [n for n in names if n]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
 
     # ------------------------------------------------------------------
     # プロジェクト・ユーザー操作

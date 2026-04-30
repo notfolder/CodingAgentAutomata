@@ -10,6 +10,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from shared.shutdown_state import is_shutdown_requested
+
 # ロガーを設定
 logger = logging.getLogger(__name__)
 
@@ -132,12 +134,14 @@ class ProgressManager:
 
         self._running が False になるまでループし続ける。
         """
-        while self._running:
+        while self._running and not is_shutdown_requested():
             # INTERVAL 秒待機（細かく分割して停止フラグを確認）
             for _ in range(self._interval_sec * 2):
-                if not self._running:
+                if not self._running or is_shutdown_requested():
                     break
                 await asyncio.sleep(0.5)
+            if is_shutdown_requested():
+                break
             # 停止フラグが立っていても最後の更新は行う
             # バッファが空でも「処理中...」コメントを投稿して CLI が動作中であることを示す
             await self._post_or_update()
@@ -149,6 +153,9 @@ class ProgressManager:
         _note_id が None の場合は新規作成し、それ以外は既存コメントを更新する。
         バッファが空の場合は「処理中...」メッセージを投稿する。
         """
+        if is_shutdown_requested():
+            return
+
         body: str = self._build_comment_body()
         loop = asyncio.get_event_loop()
 
@@ -239,5 +246,7 @@ class ProgressManager:
         CLI 終了後に呼び出して最終状態をコメントに反映する。
         """
         self.stop()
+        if is_shutdown_requested():
+            return
         if self._buffer:
             await self._post_or_update()

@@ -7,13 +7,15 @@ GitLab 上に Draft MR を作成する。
 
 import json
 import logging
-import uuid
+import base64
+import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
 from shared.models.db import Task, User
+from shared.shutdown_state import is_shutdown_requested
 
 # ロガーを設定
 logger = logging.getLogger(__name__)
@@ -155,6 +157,28 @@ class IssueToMRConverter:
             return "{}"
         return json.dumps({"mcpServers": mcp_config}, ensure_ascii=False)
 
+    def _build_run_once_script(self) -> str:
+        """
+        F-3 用 run --rm 単発実行スクリプトを返す。
+
+        各処理ステップの直前に "[STEP] 概要: ISO8601時刻" 形式のログを出力する。
+
+        環境変数:
+        - PROMPT_B64
+        - START_COMMAND_B64
+        """
+        return (
+            "set -eu\n"
+            "echo \"[STEP] スクリプト開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "echo \"[STEP] プロンプトファイル作成: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "printf '%s' \"${PROMPT_B64}\" | base64 -d > /tmp/prompt.txt\n"
+            "echo \"[STEP] 起動コマンドデコード: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "start_cmd=$(printf '%s' \"${START_COMMAND_B64}\" | base64 -d)\n"
+            "echo \"[STEP] CLI実行開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "sh -c \"${start_cmd}\"\n"
+            "echo \"[STEP] CLI実行完了: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+        )
+
     def convert(
         self,
         task_uuid: str,
@@ -274,6 +298,14 @@ class IssueToMRConverter:
             repository_url: str = (
                 project_info.get("http_url_to_repo", "") if project_info else ""
             )
+            existing_branch_names: list[str] = self._gitlab_client.list_branches(
+                project_id, max_count=100
+            )
+            existing_branches: str = (
+                "\n".join(f"- {name}" for name in sorted(existing_branch_names))
+                if existing_branch_names
+                else "- (既存ブランチなし)"
+            )
 
             prompt: str = self._prompt_builder.build_f3_prompt(
                 issue_title=issue.get("title", ""),
@@ -281,6 +313,7 @@ class IssueToMRConverter:
                 issue_comments=issue_comments,
                 project_name=project_name,
                 repository_url=repository_url,
+                existing_branches=existing_branches,
             )
 
             # ==========================================
@@ -322,57 +355,100 @@ class IssueToMRConverter:
             )
 
             # ==========================================
-            # ステップ 5: CLI コンテナ起動
+            # ステップ 5: run --rm 単発コンテナ実行
             # ==========================================
             container_name: str = f"cli-exec-{user.default_cli}-{task_uuid}"
-            container_id = self._cli_container_manager.start_container(
+            run_script: str = self._build_run_once_script()
+            run_env_vars: dict[str, str] = {
+                **env_vars,
+                "PROMPT_B64": base64.b64encode(prompt.encode("utf-8")).decode("ascii"),
+                "START_COMMAND_B64": base64.b64encode(
+                    start_command.encode("utf-8")
+                ).decode("ascii"),
+            }
+
+            container_id = self._cli_container_manager.run_container_once(
                 container_name=container_name,
                 image=adapter.container_image,
-                env_vars=env_vars,
-                command="sleep infinity",
+                env_vars=run_env_vars,
+                command=["/bin/sh", "-c", run_script],
             )
             logger.info(
-                "IssueToMRConverter: コンテナを起動しました container_id=%s", container_id
-            )
-
-            # ==========================================
-            # ステップ 5.5: プロンプトをコンテナ内ファイルに書き込み
-            # ==========================================
-            # コマンドライン引数の長さ制限を回避するため、プロンプトを
-            # コンテナ内の /tmp/prompt.txt にファイルとして書き込む。
-            # start_command_template は cat /tmp/prompt.txt でこのファイルを読み取る。
-            self._cli_container_manager.write_file(
-                container_id, "/tmp/prompt.txt", prompt
-            )
-            logger.debug(
-                "IssueToMRConverter: プロンプトファイルを書き込みました size=%d", len(prompt)
+                "IssueToMRConverter: run_once コンテナを起動しました container_id=%s",
+                container_id,
             )
 
             # ==========================================
             # ステップ 6: CLI 実行・標準出力の最終行を JSON パース
             # ==========================================
-            # exec_run でコンテナ内にてコマンドを実行（ENTRYPOINT をバイパス）
-            import docker
-            container = self._cli_container_manager._client.containers.get(
-                container_id
+            logger.debug("IssueToMRConverter: start_command=%r", start_command)
+            output_chunks: list[str] = []
+            stdout_stream = self._cli_container_manager.get_stdout_stream(container_id)
+            stream_done = threading.Event()
+
+            def _read_stream() -> None:
+                """ストリームを別スレッドで読み取る（ブロッキングI/Oをメインスレッドから分離）。"""
+                try:
+                    for chunk in stdout_stream:
+                        if not chunk:
+                            continue
+                        text = chunk.decode("utf-8", errors="replace")
+                        output_chunks.append(text)
+                        # F-3 CLI の出力を consumer の標準出力にリアルタイムで転送する
+                        for line in text.splitlines():
+                            print(line, flush=True)
+                except Exception as exc:
+                    logger.debug(
+                        "IssueToMRConverter: stdout ストリーム読み取り終了 container_id=%s: %s",
+                        container_id,
+                        exc,
+                    )
+                finally:
+                    stream_done.set()
+
+            stream_thread = threading.Thread(
+                target=_read_stream,
+                name=f"f3-cli-log-{task_uuid}",
+                daemon=True,
             )
-            logger.debug(
-                "IssueToMRConverter: start_command=%r", start_command
+            stream_thread.start()
+
+            exit_code = self._cli_container_manager.wait_container_exit(
+                container_id,
+                self._settings.cli_exec_timeout_sec,
             )
-            exec_result = container.exec_run(
-                cmd=["/bin/sh", "-c", start_command],
-                stdout=True,
-                stderr=True,
-                stream=False,
-            )
-            cli_output: str = exec_result.output.decode("utf-8", errors="replace") if exec_result.output else ""
-            # コンテナを停止
-            container.stop(timeout=5)
+
+            # コンテナ終了後、ストリームの自然終了を最大5秒待機する
+            # 終わらない場合は close() を別スレッドで呼び出してタイムアウト付きで強制終了する
+            if not stream_done.wait(timeout=5):
+                logger.debug(
+                    "IssueToMRConverter: stdout ストリームが終了しないため強制 close します container_id=%s",
+                    container_id,
+                )
+                close_fn = getattr(stdout_stream, "close", None)
+                if callable(close_fn):
+                    close_thread = threading.Thread(target=close_fn, daemon=True)
+                    close_thread.start()
+                    close_thread.join(timeout=10)
+                    if close_thread.is_alive():
+                        logger.warning(
+                            "IssueToMRConverter: stdout ストリーム close がタイムアウトしました（無視）container_id=%s",
+                            container_id,
+                        )
+                # close 後にスレッドが終了するのを最大2秒待つ
+                stream_done.wait(timeout=2)
+
+            cli_output: str = "".join(output_chunks)
             logger.debug(
                 "IssueToMRConverter: CLI 出力 exit_code=%s output=%r",
-                exec_result.exit_code,
+                exit_code,
                 cli_output[:500],
             )
+
+            if exit_code != 0:
+                raise ValueError(
+                    f"CLI が非ゼロ終了コードで終了しました（exit={exit_code}）: {cli_output[:500]}"
+                )
 
             # 最終行を JSON パース（branch_name, mr_title を取得）
             lines: list[str] = [
@@ -411,6 +487,9 @@ class IssueToMRConverter:
                 branch_name,
                 mr_title,
             )
+
+            if is_shutdown_requested():
+                raise RuntimeError("シャットダウン要求のため F-3 後処理を中断しました。")
 
             # ==========================================
             # ステップ 7: ブランチ作成
@@ -540,34 +619,35 @@ class IssueToMRConverter:
                 exc_info=True,
             )
             # GitLab Issue にエラーコメントを投稿
-            try:
-                self._gitlab_client.create_issue_note(
-                    project_id=project_id,
-                    iid=issue_iid,
-                    body=(
-                        "❌ F-3 処理中にエラーが発生しました。\n\n"
-                        f"Task ID: `{task_uuid}`\n\n"
-                        f"```\n{error_msg}\n```"
-                    ),
-                )
-                # 処理中ラベルを削除
-                issue_data: Optional[dict] = self._gitlab_client.get_issue(
-                    project_id, issue_iid
-                )
-                if issue_data:
-                    labels_to_restore: list[str] = [
-                        lbl
-                        for lbl in issue_data.get("labels", [])
-                        if lbl != self._settings.gitlab_processing_label
-                    ]
-                    self._gitlab_client.update_issue_labels(
-                        project_id, issue_iid, labels_to_restore
+            if not is_shutdown_requested():
+                try:
+                    self._gitlab_client.create_issue_note(
+                        project_id=project_id,
+                        iid=issue_iid,
+                        body=(
+                            "❌ F-3 処理中にエラーが発生しました。\n\n"
+                            f"Task ID: `{task_uuid}`\n\n"
+                            f"```\n{error_msg}\n```"
+                        ),
                     )
-            except Exception as gitlab_exc:
-                logger.warning(
-                    "IssueToMRConverter: GitLab エラーコメント投稿失敗（無視）: %s",
-                    gitlab_exc,
-                )
+                    # 処理中ラベルを削除
+                    issue_data: Optional[dict] = self._gitlab_client.get_issue(
+                        project_id, issue_iid
+                    )
+                    if issue_data:
+                        labels_to_restore: list[str] = [
+                            lbl
+                            for lbl in issue_data.get("labels", [])
+                            if lbl != self._settings.gitlab_processing_label
+                        ]
+                        self._gitlab_client.update_issue_labels(
+                            project_id, issue_iid, labels_to_restore
+                        )
+                except Exception as gitlab_exc:
+                    logger.warning(
+                        "IssueToMRConverter: GitLab エラーコメント投稿失敗（無視）: %s",
+                        gitlab_exc,
+                    )
             self._update_task_status(
                 task_uuid, "failed", error_message=error_msg
             )

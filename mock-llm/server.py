@@ -191,11 +191,48 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             # F-3 は遅延なし
             event_delay = 0.0
         else:
-            # F-4 (MR処理): テスト用に各 SSE イベント間に遅延を入れ、CLI が十分な時間実行されるようにする
-            # PROGRESS_REPORT_INTERVAL_SEC=5 の 2 サイクル（10秒）より長く実行させることで
-            # T-30 の bot アサイン解除検知テストが正常動作する
-            content = "Mock LLM response: task completed successfully."
-            event_delay = 2.0
+            # F-4 (MR処理): docker-compose 検出
+            is_docker_compose = (
+                "docker-compose" in all_user_content.lower()
+                or "docker compose" in all_user_content.lower()
+            )
+            print(
+                f"[mock-llm] is_docker_compose={is_docker_compose}",
+                flush=True,
+            )
+            
+            if is_docker_compose:
+                # F-5 (docker-compose タスク): docker-compose.yml 作成と実行をシミュレート
+                docker_compose_content = """version: '3'
+services:
+  hello:
+    image: alpine:latest
+    command: echo 'Hello World from docker-compose'
+"""
+                content = f"""I'll create and run a docker-compose.yml file.
+
+Created docker-compose.yml:
+```
+{docker_compose_content}
+```
+
+Running docker compose up...
+[+] Running 1/0
+ ⠋ hello  Running
+
+Output:
+Hello World from docker-compose
+
+docker-compose down completed.
+
+Task completed successfully!"""
+                event_delay = 2.0
+            else:
+                # F-4 (MR処理): テスト用に各 SSE イベント間に遅延を入れ、CLI が十分な時間実行されるようにする
+                # PROGRESS_REPORT_INTERVAL_SEC=5 の 2 サイクル（10秒）より長く実行させることで
+                # T-30 の bot アサイン解除検知テストが正常動作する
+                content = "Mock LLM response: task completed successfully."
+                event_delay = 2.0
 
         stream = body.get("stream", False)
         msg_id = f"msg_{uuid.uuid4().hex[:8]}"
