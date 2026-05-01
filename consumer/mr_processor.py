@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
+from consumer.progress_manager import ProgressManager
 from shared.models.db import Task, User
 from shared.shutdown_state import is_shutdown_requested
 
@@ -581,7 +582,11 @@ class MRProcessor:
                             text = chunk.decode("utf-8", errors="replace")
                             for line in text.splitlines():
                                 cli_log_lines.append(line)
-                                progress_manager.append_line(line)
+                                # JSON Lines 形式（stream-json）はデコードしてから追加する
+                                # opencode 等の通常テキストはそのまま追加される
+                                decoded = ProgressManager.decode_stream_json_line(line)
+                                if decoded is not None:
+                                    progress_manager.append_line(decoded)
                                 print(line, flush=True)
                     except Exception as exc:
                         logger.debug(

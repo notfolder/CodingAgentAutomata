@@ -6,6 +6,7 @@ MR の 1 つのコメントを作成または更新し続ける。
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Optional
@@ -113,6 +114,79 @@ class ProgressManager:
             text: str = chunk.decode("utf-8", errors="replace")
             for line in text.splitlines():
                 self.append_line(line)
+
+    @staticmethod
+    def decode_stream_json_line(line: str) -> Optional[str]:
+        """
+        Claude Code の --output-format stream-json 出力行を人間可読テキストにデコードする。
+
+        行が JSON でない場合（opencode など）はそのまま返す。
+        JSON だが表示不要なイベント（stream_event の部分デルタ等）は None を返す。
+
+        Args:
+            line: CLI 出力の 1 行
+
+        Returns:
+            Optional[str]: 表示用テキスト。None の場合はバッファへの追加をスキップする。
+        """
+        # JSON でない行はそのまま返す（opencode 等の通常テキスト出力）
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            return line
+
+        try:
+            obj = json.loads(stripped)
+        except json.JSONDecodeError:
+            # JSON パース失敗はそのまま返す
+            return line
+
+        event_type: str = obj.get("type", "")
+
+        # system イベント（初期化情報等）はスキップ
+        if event_type == "system":
+            return None
+
+        # stream_event: content_block_start でツール呼び出し開始のみ表示
+        if event_type == "stream_event":
+            event = obj.get("event", {})
+            block_type = event.get("type", "")
+            if block_type == "content_block_start":
+                content_block = event.get("content_block", {})
+                if content_block.get("type") == "tool_use":
+                    tool_name = content_block.get("name", "unknown")
+                    return f"[ツール呼び出し: {tool_name}]"
+            # その他の stream_event（delta 等）はスキップ
+            return None
+
+        # assistant メッセージ: stop_reason が null の部分メッセージはスキップ
+        if event_type == "assistant":
+            message = obj.get("message", {})
+            if message.get("stop_reason") is None:
+                return None
+            # stop_reason がある最終メッセージ: text / tool_use ブロックを整形
+            parts: list[str] = []
+            for block in message.get("content", []):
+                block_type = block.get("type", "")
+                if block_type == "text":
+                    text = block.get("text", "").strip()
+                    if text:
+                        parts.append(text)
+                elif block_type == "tool_use":
+                    parts.append(f"[ツール呼び出し: {block.get('name', 'unknown')}]")
+            return "\n".join(parts) if parts else None
+
+        # result: 完了・エラー情報を表示
+        if event_type == "result":
+            subtype: str = obj.get("subtype", "")
+            if subtype == "success":
+                result_text = obj.get("result", "").strip()
+                return f"[完了] {result_text}" if result_text else "[完了]"
+            if subtype == "error":
+                error_text = obj.get("error", "").strip()
+                return f"[エラー] {error_text}" if error_text else "[エラー]"
+
+        # その他の type はスキップ
+        return None
 
     def append_line(self, line: str) -> None:
         """

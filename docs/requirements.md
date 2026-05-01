@@ -293,7 +293,7 @@ CLIエージェントへの各情報の渡し方はCLIエージェントIDごと
 | --- | --- | --- |
 | cli_id | `claude` | `opencode` |
 | container_image | `coding-agent-cli-exec-claude:latest` | `coding-agent-cli-exec-opencode:latest` |
-| 起動コマンドテンプレート | `cat /tmp/prompt.txt \| claude -p --dangerously-skip-permissions --model {model} --mcp-config '{mcp_config}'` | `cat /tmp/prompt.txt \| opencode run - --model {model}` |
+| 起動コマンドテンプレート | `cat /tmp/prompt.txt \| claude -p --verbose --include-partial-messages --include-hook-events --output-format stream-json --dangerously-skip-permissions --model {model} --mcp-config '{mcp_config}'` | `cat /tmp/prompt.txt \| opencode run - --model {model}` |
 | llm_api_key の渡し方 | 環境変数 `ANTHROPIC_API_KEY` | OpenAIプロバイダー使用時は環境変数 `OPENAI_API_KEY`、Anthropicプロバイダー使用時は環境変数 `ANTHROPIC_API_KEY`（プロバイダーに応じてアダプタ設定の `env_mappings` で切り替える） |
 | llm_base_url の渡し方 | 環境変数 `ANTHROPIC_BASE_URL` | `config_content_env` のJSON内 `provider.options.baseURL` に設定 |
 | MCP設定の渡し方 | `start_command_template` の `{mcp_config}` 変数に展開（`--mcp-config` フラグ経由） | `config_content_env`（`OPENCODE_CONFIG_CONTENT`）のJSON内にプロバイダー設定とともにMCPサーバー設定（`mcp` キー）をマージして渡す |

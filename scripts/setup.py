@@ -95,7 +95,9 @@ BUILTIN_ADAPTERS = [
         # cat コマンドで stdin 経由で渡すことでコマンドライン引数の長さ制限を回避する。
         # claude -p に引数を渡さない場合、stdin をプロンプトとして読み取る。
         "start_command_template": (
-            "cat /tmp/prompt.txt | claude -p --dangerously-skip-permissions "
+            "cat /tmp/prompt.txt | claude -p --verbose --include-partial-messages "
+            "--include-hook-events --output-format stream-json "
+            "--dangerously-skip-permissions "
             "--model {model} --mcp-config '{mcp_config}'"
         ),
         "env_mappings": json.dumps({
@@ -151,7 +153,20 @@ def setup(
                 {"cli_id": adapter["cli_id"]},
             ).fetchone()
             if existing:
-                logger.info("CLIアダプタ '%s' は既に登録済みです", adapter["cli_id"])
+                db.execute(
+                    __import__("sqlalchemy").text(
+                        "UPDATE cli_adapters "
+                        "SET container_image = :container_image, "
+                        "start_command_template = :start_command_template, "
+                        "env_mappings = :env_mappings, "
+                        "config_content_env = :config_content_env, "
+                        "is_builtin = :is_builtin, "
+                        "updated_at = :updated_at "
+                        "WHERE cli_id = :cli_id"
+                    ),
+                    {**adapter, "updated_at": now},
+                )
+                logger.info("CLIアダプタ '%s' を最新定義に同期しました", adapter["cli_id"])
             else:
                 db.execute(
                     __import__("sqlalchemy").text(

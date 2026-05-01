@@ -656,6 +656,11 @@ test('T-28: MR処理中にCLI出力が進捗コメントに定期更新される
   const mr = await waitForMR(projectId, GITLAB_ADMIN_TOKEN, /.*/, TASK_TIMEOUT_MS, testStartTime);
   expect(mr).not.toBeNull();
 
+  // MR に作業指示を設定（LLM が何をすべきか明示する）
+  await gitlabApi('PUT', `/projects/${projectId}/merge_requests/${mr!.iid}`, GITLAB_ADMIN_TOKEN, {
+    description: '現在のブランチ名を標準出力に報告してください。その後、ブランチ名を記載した report.txt を作成してコミット・プッシュしてください。',
+  });
+
   // MR にトリガーを付与（F-4 処理開始）
   await triggerMR(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
 
@@ -700,6 +705,11 @@ test('T-30: MR処理中にbotのアサインが解除されたらCLIが強制終
   // MR が作成されるまで待つ（テスト開始後に作成された MR のみを対象にする）
   const mr = await waitForMR(projectId, GITLAB_ADMIN_TOKEN, /.*/, TASK_TIMEOUT_MS, testStartTime);
   expect(mr).not.toBeNull();
+
+  // MR に作業指示を設定（LLM が何をすべきか明示する）
+  await gitlabApi('PUT', `/projects/${projectId}/merge_requests/${mr!.iid}`, GITLAB_ADMIN_TOKEN, {
+    description: '現在のブランチ名を標準出力に報告してください。その後、ブランチ名を記載した report.txt を作成してコミット・プッシュしてください。',
+  });
 
   // MR に bot をアサイン + ラベル付与（F-4 処理開始）
   await triggerMR(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
@@ -796,6 +806,11 @@ test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () =
   // MR が作成されるまで待つ（テスト開始後に作成された MR のみを対象にする）
   const mr = await waitForMR(projectId, GITLAB_ADMIN_TOKEN, /.*/, TASK_TIMEOUT_MS, testStartTime);
   expect(mr).not.toBeNull();
+
+  // MR に作業指示を設定（LLM が何をすべきか明示する）
+  await gitlabApi('PUT', `/projects/${projectId}/merge_requests/${mr!.iid}`, GITLAB_ADMIN_TOKEN, {
+    description: '現在のブランチ名を標準出力に報告してください。その後、ブランチ名を記載した report.txt を作成してコミット・プッシュしてください。',
+  });
 
   // MR に bot をアサイン + ラベル付与（F-4: MR CLI 処理開始）
   await triggerMR(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
