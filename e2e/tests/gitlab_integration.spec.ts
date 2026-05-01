@@ -17,7 +17,8 @@
  *   T-30: MR 処理中に bot のアサインが解除されたら CLI が強制終了する
  *   T-31: testuser-opencode の Issue を opencode CLI で MR 変換できる
  *   T-32: testuser-opencode の MR を opencode CLI で処理できる
- *   T-33: CLI が docker-compose を使用できることを検証
+ *   T-33: Claude Code が docker-compose を使用できることを検証
+ *   T-34: opencode が docker-compose を使用できることを検証
  *
  * 前提条件:
  *   - docker compose --profile test up -d で GitLab CE が起動済み
@@ -838,15 +839,30 @@ test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () =
   expect(hasCompletionComment).toBe(true);
 });
 
-test('T-33: CLIが docker-compose を使用できることを検証', async () => {
+test('T-33: Claude Code が docker-compose を使用できることを検証', async () => {
   await waitForFlakyTestBarrier();
   const projectId = GITLAB_PROJECT_ID;
   const issueSuffix = Date.now();
 
+  // T-33 は必ず Claude Code 経路で実行する
+  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  const ensureClaudeResp = await fetch(`${BACKEND_URL}/api/users/testuser-claude`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      default_cli: 'claude',
+      default_model: process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001',
+    }),
+  });
+  expect(ensureClaudeResp.status).toBe(200);
+
   // このテスト開始時刻以降に作成された MR のみを対象にする
   const testStartTime = Date.now();
 
-  // Issue を作成
+  // testuser-claude として Issue を作成（backend 側ユーザー設定と合わせて Claude Code 経路にする）
   const issue = await createIssue(
     projectId, GITLAB_USER_TOKEN,
     `[E2E T-33] docker-compose 実行テスト ${issueSuffix}`,
@@ -884,7 +900,75 @@ test('T-33: CLIが docker-compose を使用できることを検証', async () =
   expect(hasDockerComposeOutput).toBe(true);
 
   // MR の差分に docker-compose.yml が含まれることを確認
-  const changes = await gitlabApi('GET', `/projects/${projectId}/merge_requests/${mr!.iid}/changes`, GITLAB_ADMIN_TOKEN);
-  const hasDockerComposeFile = changes.changes.some((c: any) => c.new_path === 'docker-compose.yml');
+  const changesResp = await gitlabApi('GET', `/projects/${projectId}/merge_requests/${mr!.iid}/changes`, GITLAB_ADMIN_TOKEN);
+  const changesData = changesResp.data as { changes: Array<{ new_path: string }> };
+  const hasDockerComposeFile = changesData.changes.some((c) => c.new_path === 'docker-compose.yml');
+  expect(hasDockerComposeFile).toBe(true);
+});
+
+test('T-34: opencode が docker-compose を使用できることを検証', async () => {
+  await waitForFlakyTestBarrier();
+  const projectId = GITLAB_PROJECT_ID;
+  const issueSuffix = Date.now();
+
+  // T-34 は必ず opencode 経路で実行する
+  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  const ensureOpenCodeResp = await fetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      default_cli: 'opencode',
+      default_model: process.env.DEFAULT_OPENAI_MODEL_LITELLM || 'openai/gpt-4o-mini',
+    }),
+  });
+  expect(ensureOpenCodeResp.status).toBe(200);
+
+  // このテスト開始時刻以降に作成された MR のみを対象にする
+  const testStartTime = Date.now();
+
+  // testuser-opencode として Issue を作成（backend 側ユーザー設定と合わせて opencode 経路にする）
+  const issue = await createIssue(
+    projectId, GITLAB_USER_TOKEN_OPENCODE,
+    `[E2E T-34] opencode docker-compose 実行テスト ${issueSuffix}`,
+    'E2E テスト: docker-compose.yml を作成して実行し、hello world を出力してください'
+  );
+  // bot アサイン + ラベル付与
+  await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+  // MR が作成されるまで待つ
+  const mr = await waitForMR(projectId, GITLAB_ADMIN_TOKEN, /.*/, TASK_TIMEOUT_MS, testStartTime);
+  expect(mr).not.toBeNull();
+
+  // MR に bot をアサイン + ラベル付与（F-4: MR CLI 処理開始）
+  // プロンプトで docker-compose を実行するよう指示
+  const mrDescription = 'docker-compose.yml を /workspace に作成して実行し、hello world を出力して報告してください。';
+  await gitlabApi('PUT', `/projects/${projectId}/merge_requests/${mr!.iid}`, GITLAB_ADMIN_TOKEN, {
+    description: mrDescription,
+  });
+  await triggerMR(projectId, mr!.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+  // 進捗コメントが投稿されるまで待つ
+  const hasProgressComment = await waitForComment(
+    projectId, 'merge_requests', mr!.iid, GITLAB_ADMIN_TOKEN,
+    '<details>',
+    TASK_TIMEOUT_MS
+  );
+  expect(hasProgressComment).toBe(true);
+
+  // docker-compose 実行結果を含むコメントを確認（mock-llm が返すメッセージ内容）
+  const hasDockerComposeOutput = await waitForComment(
+    projectId, 'merge_requests', mr!.iid, GITLAB_ADMIN_TOKEN,
+    'Hello World from docker-compose',
+    TASK_TIMEOUT_MS
+  );
+  expect(hasDockerComposeOutput).toBe(true);
+
+  // MR の差分に docker-compose.yml が含まれることを確認
+  const changesResp = await gitlabApi('GET', `/projects/${projectId}/merge_requests/${mr!.iid}/changes`, GITLAB_ADMIN_TOKEN);
+  const changesData = changesResp.data as { changes: Array<{ new_path: string }> };
+  const hasDockerComposeFile = changesData.changes.some((c) => c.new_path === 'docker-compose.yml');
   expect(hasDockerComposeFile).toBe(true);
 });

@@ -5,6 +5,10 @@
 
 ブランチ: {branch_name}
 リポジトリURL: {repository_url}
+ローカル作業パス: /workspace
+
+対象リポジトリはすでに `git clone` 済みです。
+以降の作業は `/workspace` 配下のチェックアウト済みリポジトリで行ってください。
 
 ## 作業指示（MR Description）
 
