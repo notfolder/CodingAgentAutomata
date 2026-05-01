@@ -107,6 +107,8 @@ GITLAB_CONTAINER="${GITLAB_CONTAINER:-codingagentautomata-gitlab-1}"
 GITLAB_CLEANUP="${GITLAB_CLEANUP:-true}"
 # test_setup.py と同じテスト用グループパス
 TEST_GROUP_PATH="${TEST_GROUP_PATH:-coding-agent-test-group}"
+# test_setup.py と同じテスト用プロジェクト名
+TEST_PROJECT_NAME="${TEST_PROJECT_NAME:-coding-agent-test}"
 
 echo "テスト環境セットアップを開始します..."
 
@@ -157,7 +159,7 @@ fi
 # -------------------------------------------------------
 echo ""
 if [ "${GITLAB_CLEANUP}" = "true" ]; then
-    echo "[ステップ 1.6] GitLab テストデータをクリーンアップします（group: ${TEST_GROUP_PATH}）..."
+    echo "[ステップ 1.6] GitLab テストデータをクリーンアップします（project: ${TEST_GROUP_PATH}/${TEST_PROJECT_NAME}）..."
 
     # GitLab rails 環境が応答することを確認（最大30秒待機）
     RAILS_READY_FOR_CLEANUP=false
@@ -173,13 +175,13 @@ if [ "${GITLAB_CLEANUP}" = "true" ]; then
     if [ "${RAILS_READY_FOR_CLEANUP}" = "false" ]; then
         echo "  警告: GitLab rails が応答しないためクリーンアップをスキップします"
     else
-        CLEANUP_SCRIPT="group = Group.find_by_full_path('${TEST_GROUP_PATH}') || Group.find_by(path: '${TEST_GROUP_PATH}'); if group.nil?; puts 'SKIP: target group not found'; else; full_path = group.full_path; group.destroy!; puts \"CLEANED: #{full_path}\"; end"
+        CLEANUP_SCRIPT="group = Group.find_by_full_path('${TEST_GROUP_PATH}') || Group.find_by(path: '${TEST_GROUP_PATH}'); if group.nil?; puts 'SKIP: target group not found'; else; project = group.projects.find_by(name: '${TEST_PROJECT_NAME}'); if project.nil?; puts 'SKIP: target project not found'; else; full_path = project.full_path; project.destroy!; puts \"CLEANED: #{full_path}\"; end; end"
         CLEANUP_OUTPUT=$(docker exec "${GITLAB_CONTAINER}" gitlab-rails runner "${CLEANUP_SCRIPT}" 2>&1 || true)
 
         if echo "${CLEANUP_OUTPUT}" | grep -q "CLEANED:"; then
-            echo "  ✓ GitLab テストグループを削除しました（Issue/MR/branch を含む）"
+            echo "  ✓ GitLab テストプロジェクトを削除しました（Issue/MR/branch を初期化）"
         elif echo "${CLEANUP_OUTPUT}" | grep -q "SKIP:"; then
-            echo "  既存テストグループがないためクリーンアップ不要です"
+            echo "  対象プロジェクトがないためクリーンアップ不要です"
         else
             echo "  警告: クリーンアップ結果を判定できませんでした。出力を確認してください"
             echo "${CLEANUP_OUTPUT}" | sed 's/^/    /'
