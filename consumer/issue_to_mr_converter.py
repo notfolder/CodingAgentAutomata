@@ -8,6 +8,7 @@ GitLab 上に Draft MR を作成する。
 import json
 import logging
 import base64
+import re
 import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
@@ -58,6 +59,148 @@ class IssueToMRConverter:
         self._virtual_key_service = virtual_key_service
         self._settings = settings
         self._db_session_factory: Callable[[], Session] = db_session_factory
+
+    def _extract_json_objects_from_text(self, text: str) -> list[dict]:
+        """
+        テキスト中から JSON オブジェクト断片を抽出して dict のリストを返す。
+
+        文字列リテラル中の波括弧は無視し、バランスした '{}' 区間を候補として
+        json.loads を試行する。
+        """
+        objects: list[dict] = []
+        depth = 0
+        start_idx: Optional[int] = None
+        in_string = False
+        escaped = False
+
+        for idx, ch in enumerate(text):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+
+            if ch == "{":
+                if depth == 0:
+                    start_idx = idx
+                depth += 1
+                continue
+
+            if ch == "}" and depth > 0:
+                depth -= 1
+                if depth == 0 and start_idx is not None:
+                    snippet = text[start_idx:idx + 1]
+                    try:
+                        parsed = json.loads(snippet)
+                        if isinstance(parsed, dict):
+                            objects.append(parsed)
+                    except json.JSONDecodeError:
+                        pass
+                    start_idx = None
+
+        return objects
+
+    def _extract_branch_mr_from_text(self, text: str) -> Optional[dict[str, str]]:
+        """
+        任意テキストから branch_name / mr_title を含む JSON を抽出する。
+
+        Claude の出力が説明文 + JSON コードブロックを含むケースにも対応する。
+        """
+        normalized = text.strip()
+        if not normalized:
+            return None
+
+        # まずは全文から JSON オブジェクト候補を抽出
+        objects = self._extract_json_objects_from_text(normalized)
+
+        # コードブロックがある場合はその中身も優先候補として追加
+        for match in re.finditer(
+            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
+            normalized,
+            re.IGNORECASE,
+        ):
+            objects.extend(self._extract_json_objects_from_text(match.group(1)))
+
+        for obj in objects:
+            branch_name = obj.get("branch_name")
+            mr_title = obj.get("mr_title")
+            if isinstance(branch_name, str) and isinstance(mr_title, str):
+                branch_name = branch_name.strip()
+                mr_title = mr_title.strip()
+                if branch_name and mr_title:
+                    return {
+                        "branch_name": branch_name,
+                        "mr_title": mr_title,
+                    }
+
+        return None
+
+    def _extract_f3_result_from_cli_output(self, cli_output: str) -> Optional[dict[str, str]]:
+        """
+        F-3 CLI の生出力から branch_name / mr_title を抽出する。
+
+        対応フォーマット:
+        - 従来: 1行JSON（{"branch_name":..., "mr_title":...}）
+        - Claude stream-json: assistant/result イベント内 text に JSON を含む形式
+        """
+        lines: list[str] = [
+            line.strip() for line in cli_output.splitlines() if line.strip()
+        ]
+        if not lines:
+            return None
+
+        # 1) 従来フォーマット（行そのものが JSON）
+        for line in reversed(lines):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                branch_name = parsed.get("branch_name")
+                mr_title = parsed.get("mr_title")
+                if isinstance(branch_name, str) and isinstance(mr_title, str):
+                    if branch_name.strip() and mr_title.strip():
+                        return {
+                            "branch_name": branch_name.strip(),
+                            "mr_title": mr_title.strip(),
+                        }
+
+        # 2) stream-json フォーマット（assistant/result の text を解析）
+        text_candidates: list[str] = []
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+
+            event_type = event.get("type")
+            if event_type == "assistant":
+                message = event.get("message", {})
+                for block in message.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if isinstance(text, str) and text.strip():
+                            text_candidates.append(text)
+            elif event_type == "result":
+                result_text = event.get("result", "")
+                if isinstance(result_text, str) and result_text.strip():
+                    text_candidates.append(result_text)
+
+        for text in reversed(text_candidates):
+            extracted = self._extract_branch_mr_from_text(text)
+            if extracted is not None:
+                return extracted
+
+        return None
 
     def _get_user(self, username: str) -> Optional[User]:
         """
@@ -194,7 +337,7 @@ class IssueToMRConverter:
         3. プロンプト生成（PromptBuilder）
         4. CLI アダプタ解決
         5. CLI コンテナ起動（Virtual Key 環境変数セット）
-        6. CLI 実行・標準出力の最終行を JSON パース（branch_name, mr_title 取得）
+        6. CLI 実行・標準出力を解析して JSON 結果を抽出（branch_name, mr_title 取得）
         7. ブランチ作成
         8. Draft MR 作成（Issue の description を MR description に設定）
         9. Issue の author を MR の最初のレビュアーに設定
@@ -379,7 +522,7 @@ class IssueToMRConverter:
             )
 
             # ==========================================
-            # ステップ 6: CLI 実行・標準出力の最終行を JSON パース
+            # ステップ 6: CLI 実行・標準出力を解析して JSON 結果を抽出
             # ==========================================
             logger.debug("IssueToMRConverter: start_command=%r", start_command)
             output_chunks: list[str] = []
@@ -450,22 +593,14 @@ class IssueToMRConverter:
                     f"CLI が非ゼロ終了コードで終了しました（exit={exit_code}）: {cli_output[:500]}"
                 )
 
-            # 最終行を JSON パース（branch_name, mr_title を取得）
-            lines: list[str] = [
-                line.strip() for line in cli_output.splitlines() if line.strip()
-            ]
+            # CLI 出力から branch_name / mr_title を抽出
+            lines: list[str] = [line.strip() for line in cli_output.splitlines() if line.strip()]
             if not lines:
                 raise ValueError("CLI が出力を生成しませんでした。")
 
-            result_json: dict | None = None
-            for line in reversed(lines):
-                try:
-                    parsed = json.loads(line)
-                    if isinstance(parsed, dict) and "branch_name" in parsed:
-                        result_json = parsed
-                        break
-                except json.JSONDecodeError:
-                    continue
+            result_json: Optional[dict[str, str]] = self._extract_f3_result_from_cli_output(
+                cli_output
+            )
             if result_json is None:
                 last_line: str = lines[-1] if lines else ""
                 raise ValueError(

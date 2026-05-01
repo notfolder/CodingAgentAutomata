@@ -584,9 +584,7 @@ class MRProcessor:
                                 cli_log_lines.append(line)
                                 # JSON Lines 形式（stream-json）はデコードしてから追加する
                                 # opencode 等の通常テキストはそのまま追加される
-                                decoded = ProgressManager.decode_stream_json_line(line)
-                                if decoded is not None:
-                                    progress_manager.append_line(decoded)
+                                progress_manager.decode_stream_json_line(line)
                                 print(line, flush=True)
                     except Exception as exc:
                         logger.debug(

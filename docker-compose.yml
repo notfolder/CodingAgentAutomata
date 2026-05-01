@@ -206,6 +206,11 @@ services:
         gitlab_rails['outbound_local_requests_allowlist'] = ['producer']
     ports:
       - "8929:8929"
+    volumes:
+      # GitLab データを永続化（docker compose down 後も PAT・ユーザー・パスワードを保持する）
+      - gitlab_data:/var/opt/gitlab
+      - gitlab_config:/etc/gitlab
+      - gitlab_logs:/var/log/gitlab
     networks:
       - codingagent_net
 
@@ -393,6 +398,10 @@ volumes:
   postgres_data:
   # LiteLLM 専用 PostgreSQL のデータボリューム
   postgres_litellm_data:
+  # GitLab CE データ永続化ボリューム（test / test-real プロファイル用）
+  gitlab_data:
+  gitlab_config:
+  gitlab_logs:
 
 # =============================================================
 # ネットワーク定義
