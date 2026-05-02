@@ -866,7 +866,7 @@ test('T-33: Claude Code が docker-compose を使用できることを検証', a
   const issue = await createIssue(
     projectId, GITLAB_USER_TOKEN,
     `[E2E T-33] docker-compose 実行テスト ${issueSuffix}`,
-    'E2E テスト: docker-compose.yml を作成して実行し、hello world を出力してください'
+    'E2E テスト: docker-compose.yml を /workspace に作成し、Docker 公式の hello-world イメージを使って Hello from Docker! を表示してください。表示できたら表示内容を報告して下さい。また、作成したファイルを git add して git commit してください'
   );
   // bot アサイン + ラベル付与
   await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
@@ -876,8 +876,8 @@ test('T-33: Claude Code が docker-compose を使用できることを検証', a
   expect(mr).not.toBeNull();
 
   // MR に bot をアサイン + ラベル付与（F-4: MR CLI 処理開始）
-  // プロンプトで docker-compose を実行するよう指示
-  const mr_description = 'docker-compose.yml を /workspace に作成して実行し、hello world を出力して報告してください。';
+  // プロンプトで docker-compose を実行・git commit するよう指示
+  const mr_description = 'docker-compose.yml を /workspace に作成し、Docker 公式の hello-world イメージを使って Hello from Docker! を表示してください。表示できたら表示内容を報告して下さい。作成したファイルを git add して git commit してから結果を報告してください。';
   await gitlabApi('PUT', `/projects/${projectId}/merge_requests/${mr!.iid}`, GITLAB_ADMIN_TOKEN, {
     description: mr_description
   });
@@ -891,13 +891,13 @@ test('T-33: Claude Code が docker-compose を使用できることを検証', a
   );
   expect(hasProgressComment).toBe(true);
 
-  // docker-compose 実行結果を含むコメントを確認（mock-llm が返すメッセージ内容）
-  const hasDockerComposeOutput = await waitForComment(
+  // docker-compose 実行結果を含むコメントを確認
+  const hasDockerComposeOutput2 = await waitForComment(
     projectId, 'merge_requests', mr!.iid, GITLAB_ADMIN_TOKEN,
-    'Hello World from docker-compose',
+    'Hello from Docker!',
     TASK_TIMEOUT_MS
   );
-  expect(hasDockerComposeOutput).toBe(true);
+  expect(hasDockerComposeOutput2).toBe(true);
 
   // MR の差分に docker-compose.yml が含まれることを確認
   const changesResp = await gitlabApi('GET', `/projects/${projectId}/merge_requests/${mr!.iid}/changes`, GITLAB_ADMIN_TOKEN);
@@ -933,7 +933,7 @@ test('T-34: opencode が docker-compose を使用できることを検証', asyn
   const issue = await createIssue(
     projectId, GITLAB_USER_TOKEN_OPENCODE,
     `[E2E T-34] opencode docker-compose 実行テスト ${issueSuffix}`,
-    'E2E テスト: docker-compose.yml を作成して実行し、hello world を出力してください'
+    'E2E テスト: docker-compose.yml を /workspace に作成し、Docker 公式の hello-world イメージを使って Hello from Docker! を表示してください。表示できたら表示内容を報告して下さい。作成したファイルを git add して git commit してください'
   );
   // bot アサイン + ラベル付与
   await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
@@ -943,8 +943,8 @@ test('T-34: opencode が docker-compose を使用できることを検証', asyn
   expect(mr).not.toBeNull();
 
   // MR に bot をアサイン + ラベル付与（F-4: MR CLI 処理開始）
-  // プロンプトで docker-compose を実行するよう指示
-  const mrDescription = 'docker-compose.yml を /workspace に作成して実行し、hello world を出力して報告してください。';
+  // プロンプトで docker-compose を実行・git commit するよう指示
+  const mrDescription = 'docker-compose.yml を /workspace に作成し、Docker 公式の hello-world イメージを使って Hello from Docker! を表示してください。表示できたら表示内容を報告して下さい。作成したファイルを git add して git commit してから結果を報告してください。';
   await gitlabApi('PUT', `/projects/${projectId}/merge_requests/${mr!.iid}`, GITLAB_ADMIN_TOKEN, {
     description: mrDescription,
   });
@@ -958,10 +958,10 @@ test('T-34: opencode が docker-compose を使用できることを検証', asyn
   );
   expect(hasProgressComment).toBe(true);
 
-  // docker-compose 実行結果を含むコメントを確認（mock-llm が返すメッセージ内容）
+  // docker-compose 実行結果を含むコメントを確認
   const hasDockerComposeOutput = await waitForComment(
     projectId, 'merge_requests', mr!.iid, GITLAB_ADMIN_TOKEN,
-    'Hello World from docker-compose',
+    'Hello from Docker!',
     TASK_TIMEOUT_MS
   );
   expect(hasDockerComposeOutput).toBe(true);

@@ -203,11 +203,9 @@ class MockLLMHandler(BaseHTTPRequestHandler):
             
             if is_docker_compose:
                 # F-5 (docker-compose タスク): docker-compose.yml 作成と実行をシミュレート
-                docker_compose_content = """version: '3'
-services:
+                docker_compose_content = """services:
   hello:
-    image: alpine:latest
-    command: echo 'Hello World from docker-compose'
+    image: hello-world
 """
                 content = f"""I'll create and run a docker-compose.yml file.
 
@@ -221,7 +219,8 @@ Running docker compose up...
  ⠋ hello  Running
 
 Output:
-Hello World from docker-compose
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
 
 docker-compose down completed.
 
