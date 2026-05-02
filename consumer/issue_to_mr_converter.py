@@ -7,7 +7,6 @@ GitLab 上に Draft MR を作成する。
 
 import json
 import logging
-import base64
 import re
 import threading
 from datetime import datetime, timezone
@@ -306,19 +305,13 @@ class IssueToMRConverter:
 
         各処理ステップの直前に "[STEP] 概要: ISO8601時刻" 形式のログを出力する。
 
-        環境変数:
-        - PROMPT_B64
-        - START_COMMAND_B64
+        起動前に /tmp/prompt.txt と /tmp/start_command.sh が書き込まれている前提。
         """
         return (
             "set -eu\n"
             "echo \"[STEP] スクリプト開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
-            "echo \"[STEP] プロンプトファイル作成: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
-            "printf '%s' \"${PROMPT_B64}\" | base64 -d > /tmp/prompt.txt\n"
-            "echo \"[STEP] 起動コマンドデコード: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
-            "start_cmd=$(printf '%s' \"${START_COMMAND_B64}\" | base64 -d)\n"
             "echo \"[STEP] CLI実行開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
-            "sh -c \"${start_cmd}\"\n"
+            "sh /tmp/start_command.sh\n"
             "echo \"[STEP] CLI実行完了: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
         )
 
@@ -504,10 +497,10 @@ class IssueToMRConverter:
             run_script: str = self._build_run_once_script()
             run_env_vars: dict[str, str] = {
                 **env_vars,
-                "PROMPT_B64": base64.b64encode(prompt.encode("utf-8")).decode("ascii"),
-                "START_COMMAND_B64": base64.b64encode(
-                    start_command.encode("utf-8")
-                ).decode("ascii"),
+            }
+            file_writes: dict[str, str] = {
+                "/tmp/prompt.txt": prompt,
+                "/tmp/start_command.sh": start_command,
             }
 
             container_id = self._cli_container_manager.run_container_once(
@@ -515,6 +508,7 @@ class IssueToMRConverter:
                 image=adapter.container_image,
                 env_vars=run_env_vars,
                 command=["/bin/sh", "-c", run_script],
+                file_writes=file_writes,
             )
             logger.info(
                 "IssueToMRConverter: run_once コンテナを起動しました container_id=%s",

@@ -5,7 +5,6 @@ MR に対して CLI を実行し、進捗報告・アサイニー監視を並行
 """
 
 import asyncio
-import base64
 import json
 import logging
 import re
@@ -17,7 +16,6 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from consumer.progress_manager import ProgressManager
 from shared.models.db import Task, User
 from shared.shutdown_state import is_shutdown_requested
 
@@ -281,10 +279,7 @@ class MRProcessor:
         環境変数:
         - CLONE_URL
         - BRANCH_NAME
-        - PROMPT_B64
-        - START_COMMAND
         """
-        start_command_b64 = base64.b64encode(start_command.encode("utf-8")).decode("ascii")
         return (
             "set -eu\n"
             "echo \"[STEP] スクリプト開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
@@ -304,12 +299,9 @@ class MRProcessor:
             "echo \"[STEP] initial HEAD 取得: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
             "initial_head=$(git rev-parse HEAD)\n"
             "echo \"__INITIAL_HEAD__:${initial_head}\"\n"
-            "echo \"[STEP] プロンプトファイル作成: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
-            "printf '%s' \"${PROMPT_B64}\" | base64 -d > /tmp/prompt.txt\n"
-            f"start_cmd=$(printf '%s' '{start_command_b64}' | base64 -d)\n"
             "cli_exit=0\n"
             "echo \"[STEP] CLI実行開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
-            "sh -c \"${start_cmd}\" || cli_exit=$?\n"
+            "sh /tmp/start_command.sh || cli_exit=$?\n"
             "echo \"[STEP] CLI実行完了 exit=${cli_exit}: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
             "final_head=$(git rev-parse HEAD 2>/dev/null || echo '')\n"
             "echo \"__FINAL_HEAD__:${final_head}\"\n"
@@ -532,9 +524,12 @@ class MRProcessor:
                 **env_vars,
                 "CLONE_URL": clone_url,
                 "BRANCH_NAME": branch_name,
-                "PROMPT_B64": base64.b64encode(prompt.encode("utf-8")).decode("ascii"),
                 "GIT_BOT_NAME": self._settings.gitlab_bot_name,
                 "GIT_BOT_EMAIL": f"{self._settings.gitlab_bot_name}@users.noreply.gitlab.local",
+            }
+            file_writes: dict[str, str] = {
+                "/tmp/prompt.txt": prompt,
+                "/tmp/start_command.sh": start_command,
             }
 
             # ==========================================
@@ -568,6 +563,7 @@ class MRProcessor:
                     image=adapter.container_image,
                     env_vars=run_env_vars,
                     command=["/bin/sh", "-c", run_script],
+                    file_writes=file_writes,
                 )
                 logger.info("MRProcessor: run_once コンテナ起動 container_id=%s", container_id)
 

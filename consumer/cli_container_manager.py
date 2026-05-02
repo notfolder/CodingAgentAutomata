@@ -375,6 +375,7 @@ class CLIContainerManager:
         image: str,
         env_vars: dict[str, str],
         command: str | list[str],
+        file_writes: dict[str, str] | None = None,
     ) -> str:
         """
         `docker run --rm` 相当で単発コンテナを起動し、コンテナ ID を返す。
@@ -384,6 +385,7 @@ class CLIContainerManager:
             image: コンテナイメージ名・タグ
             env_vars: コンテナに渡す環境変数
             command: コンテナのメインプロセスとして実行するコマンド
+            file_writes: 起動前にコンテナ内へ書き込むファイル群
 
         Returns:
             str: 起動したコンテナ ID
@@ -426,6 +428,10 @@ class CLIContainerManager:
             auto_remove=True,
         )
         container_id = container.id
+
+        if file_writes:
+            for file_path, content in file_writes.items():
+                self._write_file_to_container(container, file_path, content)
 
         # container.logs(stream=True, follow=True) は create() 直後（created 状態）に呼ぶと
         # start() 後に生成されたログがストリームに含まれず出力が空になる問題がある。
@@ -595,6 +601,45 @@ class CLIContainerManager:
                 "CLIContainerManager.kill_process: KILL失敗（無視）: %s", exc
             )
 
+    def _write_file_to_container(
+        self,
+        container: docker.models.containers.Container,
+        file_path: str,
+        content: str,
+    ) -> None:
+        """
+        コンテナ内にファイルを書き込む。
+
+        Args:
+            container: 対象コンテナ
+            file_path: コンテナ内のファイルパス（例: /tmp/prompt.txt）
+            content: 書き込むファイルの内容
+        """
+        logger.debug(
+            "CLIContainerManager._write_file_to_container: container_id=%s, path=%s, size=%d",
+            container.id,
+            file_path,
+            len(content),
+        )
+        content_bytes: bytes = content.encode("utf-8")
+        file_name: str = os.path.basename(file_path)
+        dir_path: str = os.path.dirname(file_path)
+
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
+            tarinfo = tarfile.TarInfo(name=file_name)
+            tarinfo.size = len(content_bytes)
+            tarinfo.mode = 0o644
+            tar.addfile(tarinfo, io.BytesIO(content_bytes))
+        tar_buffer.seek(0)
+
+        container.put_archive(dir_path, tar_buffer.getvalue())
+        logger.debug(
+            "CLIContainerManager._write_file_to_container: ファイルを書き込みました path=%s, size=%d",
+            file_path,
+            len(content_bytes),
+        )
+
     def write_file(self, container_id: str, file_path: str, content: str) -> None:
         """
         コンテナ内にファイルを書き込む。
@@ -619,27 +664,7 @@ class CLIContainerManager:
         container: docker.models.containers.Container = self._client.containers.get(
             container_id
         )
-        content_bytes: bytes = content.encode("utf-8")
-        file_name: str = os.path.basename(file_path)
-        dir_path: str = os.path.dirname(file_path)
-
-        # tar アーカイブをメモリ上に構築
-        tar_buffer = io.BytesIO()
-        with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-            tarinfo = tarfile.TarInfo(name=file_name)
-            tarinfo.size = len(content_bytes)
-            # 全ユーザーに読み取り権限を付与（644）
-            tarinfo.mode = 0o644
-            tar.addfile(tarinfo, io.BytesIO(content_bytes))
-        tar_buffer.seek(0)
-
-        # 指定ディレクトリにファイルを配置
-        container.put_archive(dir_path, tar_buffer.getvalue())
-        logger.debug(
-            "CLIContainerManager.write_file: ファイルを書き込みました path=%s, size=%d",
-            file_path,
-            len(content_bytes),
-        )
+        self._write_file_to_container(container, file_path, content)
 
     def configure_git(self, container_id: str, bot_name: str) -> bool:
         """
