@@ -28,6 +28,15 @@ _NO_OP_PHRASES = [
     "just describe what you need and i'll get started",
 ]
 
+_MAX_CONSECUTIVE_MONITOR_FAILURES = 3
+
+
+def _is_executor_shutdown_error(exc: Exception) -> bool:
+    """default executor の停止後に submit した失敗かどうかを判定する。"""
+    if not isinstance(exc, RuntimeError):
+        return False
+    return "cannot schedule new futures after shutdown" in str(exc).lower()
+
 
 class MRProcessor:
     """F-4 処理: MR 処理を実行するクラス。"""
@@ -331,6 +340,7 @@ class MRProcessor:
         bot_name: str = self._settings.gitlab_bot_name
         interval: int = self._settings.progress_report_interval_sec
         loop = asyncio.get_event_loop()
+        consecutive_failures = 0
 
         while True:
             if is_shutdown_requested():
@@ -344,6 +354,7 @@ class MRProcessor:
                 if mr is None:
                     logger.warning("MRProcessor._monitor_assignees: MR が見つかりません")
                     return False
+                consecutive_failures = 0
                 assignees: list[dict] = mr.get("assignees", [])
                 assignee_usernames: list[str] = [
                     a.get("username", "") for a in assignees
@@ -359,8 +370,27 @@ class MRProcessor:
             except Exception as exc:
                 if is_shutdown_requested():
                     return False
+                if _is_executor_shutdown_error(exc):
+                    logger.warning(
+                        "MRProcessor._monitor_assignees: executor 停止を検知したため監視を停止します: %s",
+                        exc,
+                    )
+                    return False
+
+                consecutive_failures += 1
+                if consecutive_failures >= _MAX_CONSECUTIVE_MONITOR_FAILURES:
+                    logger.warning(
+                        "MRProcessor._monitor_assignees: アサイニー確認失敗が %d 回連続したため監視を停止します: %s",
+                        consecutive_failures,
+                        exc,
+                    )
+                    return False
+
                 logger.warning(
-                    "MRProcessor._monitor_assignees: アサイニー確認失敗（無視）: %s", exc
+                    "MRProcessor._monitor_assignees: アサイニー確認失敗（%d/%d、継続）: %s",
+                    consecutive_failures,
+                    _MAX_CONSECUTIVE_MONITOR_FAILURES,
+                    exc,
                 )
 
     async def process(

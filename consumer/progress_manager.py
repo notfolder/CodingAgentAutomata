@@ -18,6 +18,16 @@ from shared.shutdown_state import is_shutdown_requested
 logger = logging.getLogger(__name__)
 
 
+_MAX_CONSECUTIVE_UPDATE_FAILURES = 3
+
+
+def _is_executor_shutdown_error(exc: Exception) -> bool:
+    """default executor の停止後に submit した失敗かどうかを判定する。"""
+    if not isinstance(exc, RuntimeError):
+        return False
+    return "cannot schedule new futures after shutdown" in str(exc).lower()
+
+
 class ProgressManager:
     """
     CLI 実行中の進捗を GitLab MR コメントに定期更新するクラス。
@@ -72,6 +82,8 @@ class ProgressManager:
         self._running: bool = False
         # 更新タスク
         self._update_task: Optional[asyncio.Task] = None
+        # GitLab コメント更新の連続失敗回数
+        self._consecutive_update_failures: int = 0
 
         # stream-json デコード用の状態変数
         # text ブロック（content_block_start type=text）の処理中フラグ
@@ -360,9 +372,32 @@ class ProgressManager:
                     "ProgressManager: 進捗コメントを更新しました note_id=%s",
                     self._note_id,
                 )
+            self._consecutive_update_failures = 0
         except Exception as exc:
-            # コメント更新失敗はログ記録のみ（処理継続）
-            logger.warning("ProgressManager: コメント更新失敗（無視）: %s", exc)
+            if _is_executor_shutdown_error(exc):
+                self._running = False
+                logger.warning(
+                    "ProgressManager: executor 停止を検知したため進捗更新を停止します: %s",
+                    exc,
+                )
+                return
+
+            self._consecutive_update_failures += 1
+            if self._consecutive_update_failures >= _MAX_CONSECUTIVE_UPDATE_FAILURES:
+                self._running = False
+                logger.warning(
+                    "ProgressManager: コメント更新失敗が %d 回連続したため進捗更新を停止します: %s",
+                    self._consecutive_update_failures,
+                    exc,
+                )
+                return
+
+            logger.warning(
+                "ProgressManager: コメント更新失敗（%d/%d、継続）: %s",
+                self._consecutive_update_failures,
+                _MAX_CONSECUTIVE_UPDATE_FAILURES,
+                exc,
+            )
 
     @staticmethod
     def _escape_html(text: str) -> str:
