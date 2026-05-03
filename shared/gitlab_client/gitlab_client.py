@@ -779,5 +779,12 @@ class GitLabClient:
         # _call_with_retry は 404 を飲み込んで None を返すため、直接呼び出す
         try:
             group.hooks.delete(hook_id)
-        except gitlab.exceptions.GitlabHttpError:
+        except gitlab.exceptions.GitlabHttpError as exc:
+            logger.warning(
+                "Webhook削除に失敗しました: group_id=%d, hook_id=%d, status=%s, msg=%s",
+                group_id,
+                hook_id,
+                getattr(exc, "response_code", "unknown"),
+                exc,
+            )
             raise

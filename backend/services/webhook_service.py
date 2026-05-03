@@ -136,6 +136,7 @@ class WebhookService:
             )
 
         # シークレットトークンを環境変数から取得する
+        # 未設定（空文字列）の場合はシークレットなしで登録する（設定必須ではないが推奨）
         secret = os.environ.get("GITLAB_WEBHOOK_SECRET", "")
 
         try:
@@ -195,7 +196,7 @@ class WebhookService:
             # GitlabHttpError(404): hookが存在しない
             is_not_found = isinstance(exc, KeyError) or (
                 isinstance(exc, gitlab.exceptions.GitlabHttpError)
-                and exc.response_code == 404
+                and getattr(exc, "response_code", None) == 404
             )
             if is_not_found:
                 logger.warning(
