@@ -103,13 +103,14 @@ app.add_middleware(
 
 # 全ルーターを /api プレフィックスで登録
 # インポートはモジュールレベルで行い、sys.path 設定後に実行されるよう遅延インポートを回避
-from backend.routers import auth, cli_adapters, settings, tasks, users  # noqa: E402
+from backend.routers import auth, cli_adapters, settings, tasks, users, webhooks  # noqa: E402
 
 app.include_router(auth.router, prefix="/api")
 app.include_router(users.router, prefix="/api")
 app.include_router(tasks.router, prefix="/api")
 app.include_router(cli_adapters.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
+app.include_router(webhooks.router, prefix="/api")
 
 
 @app.get("/health")

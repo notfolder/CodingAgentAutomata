@@ -674,3 +674,110 @@ class GitLabClient:
             return users[0].attributes
 
         return self._call_with_retry(_call)
+
+    # ------------------------------------------------------------------
+    # Group Webhook 操作
+    # ------------------------------------------------------------------
+
+    def get_top_level_groups(self) -> list[dict]:
+        """
+        botトークンが権限を持つ最上位グループ一覧を取得する。
+
+        Returns:
+            最上位グループ属性辞書のリスト
+        """
+        def _call():
+            # top_level_only=True で親グループを持たないグループのみ取得する
+            groups = self._list_all_pages(
+                self._gl.groups,
+                top_level_only=True,
+                order_by="name",
+                sort="asc",
+            )
+            return [g.attributes for g in groups]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
+
+    def list_group_hooks(self, group_id: int) -> list[dict]:
+        """
+        指定グループに登録済みのWebhook一覧を取得する。
+
+        Args:
+            group_id: GitLabグループID
+
+        Returns:
+            Webhook属性辞書のリスト
+        """
+        def _call():
+            group = self._gl.groups.get(group_id)
+            hooks = self._list_all_pages(group.hooks)
+            return [h.attributes for h in hooks]
+
+        result = self._call_with_retry(_call)
+        return result if result is not None else []
+
+    def create_group_webhook(
+        self,
+        group_id: int,
+        url: str,
+        secret: str = "",
+    ) -> Optional[dict]:
+        """
+        指定グループにWebhookを新規登録する。
+
+        イベント種別は Issues events・Merge requests events を固定で有効にする。
+
+        Args:
+            group_id: GitLabグループID
+            url: Webhook受信URL
+            secret: シークレットトークン（省略可）
+
+        Returns:
+            作成されたWebhook属性辞書
+        """
+        def _call():
+            group = self._gl.groups.get(group_id)
+            payload: dict = {
+                "url": url,
+                # Issues events を有効にする（固定）
+                "issues_events": True,
+                # Merge requests events を有効にする（固定）
+                "merge_requests_events": True,
+            }
+            if secret:
+                payload["token"] = secret
+            hook = group.hooks.create(payload)
+            return hook.attributes
+
+        return self._call_with_retry(_call)
+
+    def delete_group_webhook(self, group_id: int, hook_id: int) -> None:
+        """
+        指定グループのWebhookを削除する。
+
+        グループまたはhookが存在しない場合は KeyError を送出する。
+
+        Args:
+            group_id: GitLabグループID
+            hook_id: 削除するWebhookのID
+
+        Raises:
+            KeyError: グループまたはWebhookが存在しない（404）
+            gitlab.exceptions.GitlabHttpError: その他 GitLab API エラー時
+        """
+        # グループを取得する（リトライ付き。404の場合はNoneを返す）
+        def _get_group():
+            return self._gl.groups.get(group_id)
+
+        group = self._call_with_retry(_get_group)
+        if group is None:
+            # グループが存在しない（404）
+            raise KeyError(f"Group not found: group_id={group_id}")
+
+        # hook を削除する（404はそのまま送出させるため _call_with_retry を使わない）
+        # _call_with_retry は 404 を飲み込んで None を返すため、直接呼び出す
+        try:
+            group.hooks.delete(hook_id)
+        except gitlab.exceptions.GitlabHttpError:
+            raise

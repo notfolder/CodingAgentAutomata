@@ -18,6 +18,8 @@ class SystemSettingsResponse(BaseModel):
     f4_prompt_template: Optional[str] = None
     # システムMCP設定（JSON文字列またはdict）
     system_mcp_config: Optional[Any] = None
+    # Group Webhook登録時に使用するWebhook受信URL
+    webhook_receive_url: Optional[str] = None
 
 
 class SystemSettingsUpdate(BaseModel):
@@ -29,3 +31,5 @@ class SystemSettingsUpdate(BaseModel):
     f4_prompt_template: Optional[str] = None
     # システムMCP設定（省略可）
     system_mcp_config: Optional[Any] = None
+    # Group Webhook登録時に使用するWebhook受信URL（省略可）
+    webhook_receive_url: Optional[str] = None

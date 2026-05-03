@@ -42,6 +42,12 @@ function handleLogout(): void {
         タスク履歴
       </v-btn>
 
+      <!-- Group Webhook管理（全ユーザー） -->
+      <v-btn to="/webhooks" variant="text">
+        <v-icon left>mdi-webhook</v-icon>
+        Webhook管理
+      </v-btn>
+
       <!-- システム設定（admin のみ） -->
       <v-btn v-if="auth.isAdmin" to="/settings" variant="text">
         <v-icon left>mdi-cog</v-icon>

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 _KEY_F3_PROMPT = "f3_prompt_template"
 _KEY_F4_PROMPT = "f4_prompt_template"
 _KEY_SYSTEM_MCP = "system_mcp_config"
+_KEY_WEBHOOK_URL = "webhook_receive_url"
 
 
 def _parse_json_or_str(value: Optional[str]) -> Any:
@@ -85,6 +86,7 @@ class SystemSettingsService:
         f3_setting = self._repo.get(_KEY_F3_PROMPT)
         f4_setting = self._repo.get(_KEY_F4_PROMPT)
         mcp_setting = self._repo.get(_KEY_SYSTEM_MCP)
+        webhook_url_setting = self._repo.get(_KEY_WEBHOOK_URL)
 
         return SystemSettingsResponse(
             f3_prompt_template=f3_setting.value if f3_setting else None,
@@ -93,7 +95,18 @@ class SystemSettingsService:
             system_mcp_config=_parse_json_or_str(
                 mcp_setting.value if mcp_setting else None
             ),
+            webhook_receive_url=webhook_url_setting.value if webhook_url_setting else None,
         )
+
+    def get_webhook_receive_url(self) -> Optional[str]:
+        """
+        Webhook受信URLをシステム設定から取得する。
+
+        Returns:
+            Optional[str]: Webhook受信URL（未設定の場合はNone）
+        """
+        setting = self._repo.get(_KEY_WEBHOOK_URL)
+        return setting.value if setting else None
 
     def update_settings(self, data: SystemSettingsUpdate) -> SystemSettingsResponse:
         """
@@ -121,6 +134,9 @@ class SystemSettingsService:
             serialized = _serialize_value(data.system_mcp_config)
             if serialized is not None:
                 updates[_KEY_SYSTEM_MCP] = serialized
+
+        if data.webhook_receive_url is not None:
+            updates[_KEY_WEBHOOK_URL] = data.webhook_receive_url
 
         # 一括 upsert
         if updates:

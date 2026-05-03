@@ -147,12 +147,29 @@ export interface SystemSettingsResponse {
   f3_prompt_template: string | null
   f4_prompt_template: string | null
   system_mcp_config: unknown
+  webhook_receive_url: string | null
 }
 
 export interface SystemSettingsUpdateData {
   f3_prompt_template?: string | null
   f4_prompt_template?: string | null
   system_mcp_config?: unknown
+  webhook_receive_url?: string | null
+}
+
+// Group Webhook 管理
+export interface GroupWithWebhookStatus {
+  group_id: number
+  group_name: string
+  group_path: string
+  webhook_id: number | null
+  webhook_url: string | null
+  is_registered: boolean
+}
+
+export interface WebhookCreatedResponse {
+  hook_id: number
+  url: string
 }
 
 // ============================================================
@@ -325,6 +342,36 @@ export async function updateSettings(
 ): Promise<SystemSettingsResponse> {
   const response = await apiClient.put<SystemSettingsResponse>('/settings', data)
   return response.data
+}
+
+// --- Group Webhook 管理 ---
+
+/**
+ * 最上位グループ一覧とWebhook登録状況を取得する
+ */
+export async function getGroupsWithWebhookStatus(): Promise<GroupWithWebhookStatus[]> {
+  const response = await apiClient.get<GroupWithWebhookStatus[]>('/webhooks/groups')
+  return response.data
+}
+
+/**
+ * 指定グループにWebhookを登録する
+ * @param groupId GitLabグループID
+ */
+export async function registerWebhook(groupId: number): Promise<WebhookCreatedResponse> {
+  const response = await apiClient.post<WebhookCreatedResponse>(
+    `/webhooks/groups/${groupId}/hooks`,
+  )
+  return response.data
+}
+
+/**
+ * 指定グループのWebhookを削除する
+ * @param groupId GitLabグループID
+ * @param hookId 削除するWebhookのID
+ */
+export async function deleteWebhook(groupId: number, hookId: number): Promise<void> {
+  await apiClient.delete(`/webhooks/groups/${groupId}/hooks/${hookId}`)
 }
 
 export default apiClient

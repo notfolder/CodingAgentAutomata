@@ -9,6 +9,7 @@ const UserDetailView = () => import('../views/UserDetailView.vue')
 const UserEditView = () => import('../views/UserEditView.vue')
 const TaskListView = () => import('../views/TaskListView.vue')
 const SettingsView = () => import('../views/SettingsView.vue')
+const WebhooksView = () => import('../views/WebhooksView.vue')
 
 const router = createRouter({
   history: createWebHistory(),
@@ -54,6 +55,12 @@ const router = createRouter({
       name: 'Settings',
       component: SettingsView,
       meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/webhooks',
+      name: 'Webhooks',
+      component: WebhooksView,
+      meta: { requiresAuth: true },
     },
     {
       // ルートパスはタスク一覧へリダイレクト

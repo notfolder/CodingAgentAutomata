@@ -29,12 +29,14 @@ const settings = ref<SystemSettingsResponse>({
   f3_prompt_template: null,
   f4_prompt_template: null,
   system_mcp_config: null,
+  webhook_receive_url: null,
 })
 
 // テンプレートの編集値
 const f3Template = ref('')
 const f4Template = ref('')
 const systemMcpConfig = ref('')
+const webhookReceiveUrl = ref('')
 
 /**
  * システム設定を取得する
@@ -48,6 +50,7 @@ async function fetchSettings(): Promise<void> {
     systemMcpConfig.value = settings.value.system_mcp_config
       ? JSON.stringify(settings.value.system_mcp_config, null, 2)
       : ''
+    webhookReceiveUrl.value = settings.value.webhook_receive_url ?? ''
   } catch {
     errorMessage.value = 'システム設定の取得に失敗しました。'
   } finally {
@@ -83,6 +86,9 @@ async function handleSave(): Promise<void> {
         }
       }
       await updateSettings({ system_mcp_config: parsedConfig })
+    } else if (activeTab.value === 'webhook') {
+      // Webhook受信URLの保存
+      await updateSettings({ webhook_receive_url: webhookReceiveUrl.value || null })
     }
     successMessage.value = '設定を保存しました。'
   } catch {
@@ -322,6 +328,7 @@ onMounted(async () => {
         <v-tab value="f4">F-4 テンプレート</v-tab>
         <v-tab value="adapters">CLI アダプタ</v-tab>
         <v-tab value="mcp">MCP 設定</v-tab>
+        <v-tab value="webhook">Webhook受信URL</v-tab>
       </v-tabs>
 
       <v-divider />
@@ -487,6 +494,37 @@ onMounted(async () => {
                   :loading="loading"
                   font-family="monospace"
                   hint="JSON形式で入力してください"
+                  persistent-hint
+                />
+              </v-col>
+            </v-row>
+            <v-btn
+              color="primary"
+              class="mt-4"
+              :loading="saveLoading"
+              prepend-icon="mdi-content-save"
+              @click="handleSave"
+            >
+              保存する
+            </v-btn>
+          </v-card-text>
+        </v-window-item>
+
+        <!-- Webhook受信URL設定タブ -->
+        <v-window-item value="webhook">
+          <v-card-text class="pa-6">
+            <v-row>
+              <v-col cols="12">
+                <h2 class="text-subtitle-1 font-weight-bold mb-2">Webhook受信URL</h2>
+                <p class="text-body-2 text-medium-emphasis mb-3">
+                  Group Webhook登録時に使用するWebhook受信URLを設定します。
+                </p>
+                <v-text-field
+                  v-model="webhookReceiveUrl"
+                  variant="outlined"
+                  placeholder="https://example.com/webhook"
+                  :loading="loading"
+                  hint="Group Webhook登録時に GitLab の送信先として使用されます"
                   persistent-hint
                 />
               </v-col>
