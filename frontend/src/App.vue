@@ -8,6 +8,7 @@ const router = useRouter()
 
 // ナビゲーションバーの表示制御
 const showNav = computed(() => auth.isAuthenticated)
+const profilePath = computed(() => `/users/${auth.currentUsername}`)
 
 // ログアウト処理
 function handleLogout(): void {
@@ -27,6 +28,12 @@ function handleLogout(): void {
       <v-btn v-if="auth.isAdmin" to="/users" variant="text">
         <v-icon left>mdi-account-group</v-icon>
         ユーザー一覧
+      </v-btn>
+
+      <!-- 自分の設定（全ユーザー） -->
+      <v-btn :to="profilePath" variant="text">
+        <v-icon left>mdi-account-cog</v-icon>
+        自分の設定
       </v-btn>
 
       <!-- タスク実行履歴 -->

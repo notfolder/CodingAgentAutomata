@@ -9,7 +9,7 @@ docker compose --profile test で起動した GitLab CE を含む全環境のセ
   2. GitLab root PAT の自動取得（GITLAB_ADMIN_TOKEN 未設定の場合は docker exec 経由で取得）
   3. bot ユーザー作成・PAT 発行
   4. テスト用プロジェクト作成・メンバー追加・ラベル設定
-  5. Webhook 設定
+    5. Group Webhook 設定
   6. テストユーザー作成（GitLab）
   7. LiteLLM Proxy でテスト用 Virtual Key 発行（LITELLM_MASTER_KEY 設定時のみ）
   8. mock LLM で Virtual Key 発行（LITELLM_MASTER_KEY 未設定時のフォールバック）
@@ -38,7 +38,6 @@ docker compose --profile test で起動した GitLab CE を含む全環境のセ
     WAIT_GITLAB           GitLab 起動を待機するか（デフォルト: true）
 """
 
-import json
 import logging
 import os
 import subprocess
@@ -293,7 +292,8 @@ def setup_test_group(root_token: str) -> str:
         logger.info("テスト用グループ '%s' を作成しました (ID: %s)", TEST_GROUP_PATH, group_id)
         return group_id
 
-    if resp.status_code in (409, 422):
+    if resp.status_code in (400, 409, 422):
+        # 400 は GitLab CE で「パスが既に使用されている」場合にも返される
         resp2 = _gitlab_api("GET", f"/groups?search={TEST_GROUP_PATH}", root_token)
         if resp2.status_code == 200:
             groups = [g for g in resp2.json() if g.get("full_path") == TEST_GROUP_PATH or g.get("path") == TEST_GROUP_PATH]
@@ -306,13 +306,12 @@ def setup_test_group(root_token: str) -> str:
     return ""
 
 
-def setup_test_project(root_token: str, bot_user_id: str) -> str:
+def setup_test_project(root_token: str, bot_user_id: str, group_id: str) -> str:
     """テスト用グループ配下にプロジェクトを作成してラベル・メンバーを設定する
 
     Returns:
         project_id
     """
-    group_id = setup_test_group(root_token)
     if not group_id:
         return ""
 
@@ -350,31 +349,27 @@ def setup_test_project(root_token: str, bot_user_id: str) -> str:
         logger.error("テスト用プロジェクト作成失敗 (%d): %s", resp.status_code, resp.text[:200])
         return ""
 
-    # bot をメンテナーとして追加
+    # bot をグループオーナーとして追加し、プロジェクトにもメンテナーとして追加
     if bot_user_id:
+        _gitlab_api("POST", f"/groups/{group_id}/members", root_token, json={
+            "user_id": int(bot_user_id),
+            "access_level": 50,  # Owner
+        })
+        logger.info("bot をグループオーナーに追加しました")
+        # bot をプロジェクトのメンテナーとしても追加
         _gitlab_api("POST", f"/projects/{project_id}/members", root_token, json={
             "user_id": int(bot_user_id),
             "access_level": 40,  # Maintainer
         })
         logger.info("bot をプロジェクトメンバーに追加しました")
 
-    # テストユーザーをプロジェクトに追加
-    for user in TEST_USERS:
-        resp2 = _gitlab_api("GET", f"/users?username={user['username']}", root_token)
-        if resp2.status_code == 200 and resp2.json():
-            uid = resp2.json()[0]["id"]
-            _gitlab_api("POST", f"/projects/{project_id}/members", root_token, json={
-                "user_id": uid,
-                "access_level": 40,
-            })
-
-    # ラベル作成
+    # グループラベル作成（グループ配下の全プロジェクトで共有可能）
     for label_name, color in [
         (BOT_LABEL, "#6699cc"),
         ("coding agent processing", "#e67e22"),
         ("coding agent done", "#2ecc71"),
     ]:
-        _gitlab_api("POST", f"/projects/{project_id}/labels", root_token, json={
+        _gitlab_api("POST", f"/groups/{group_id}/labels", root_token, json={
             "name": label_name,
             "color": color,
         })
@@ -396,28 +391,52 @@ def allow_local_requests(root_token: str) -> None:
         logger.warning("ローカル Webhook 許可設定失敗 (%d): %s", resp.status_code, resp.text[:200])
 
 
-def setup_webhook(root_token: str, project_id: str) -> None:
-    """プロジェクトに Webhook を設定する"""
-    resp = _gitlab_api("POST", f"/projects/{project_id}/hooks", root_token, json={
+def setup_group_webhook(root_token: str, group_id: str) -> None:
+    """グループに Webhook を設定する（既存URLがあれば更新）"""
+    payload = {
         "url": WEBHOOK_URL,
         "token": GITLAB_WEBHOOK_SECRET,
         "issues_events": True,
         "merge_requests_events": True,
         "push_events": False,
         "enable_ssl_verification": False,
-    })
+    }
+
+    list_resp = _gitlab_api("GET", f"/groups/{group_id}/hooks", root_token)
+    if list_resp.status_code != 200:
+        logger.warning(
+            "Group Webhook 一覧取得失敗 (%d): %s",
+            list_resp.status_code,
+            list_resp.text[:200],
+        )
+        return
+
+    existing_hooks = list_resp.json() if isinstance(list_resp.json(), list) else []
+    target_hook = next((h for h in existing_hooks if h.get("url") == WEBHOOK_URL), None)
+
+    if target_hook:
+        hook_id = target_hook.get("id")
+        resp = _gitlab_api("PUT", f"/groups/{group_id}/hooks/{hook_id}", root_token, json=payload)
+        if resp.status_code == 200:
+            logger.info("Group Webhook を更新しました: %s (group_id=%s)", WEBHOOK_URL, group_id)
+        else:
+            logger.warning("Group Webhook 更新失敗 (%d): %s", resp.status_code, resp.text[:200])
+        return
+
+    resp = _gitlab_api("POST", f"/groups/{group_id}/hooks", root_token, json=payload)
     if resp.status_code == 201:
-        logger.info("Webhook を設定しました: %s", WEBHOOK_URL)
+        logger.info("Group Webhook を設定しました: %s (group_id=%s)", WEBHOOK_URL, group_id)
     else:
-        logger.warning("Webhook 設定失敗 (%d): %s", resp.status_code, resp.text[:200])
+        logger.warning("Group Webhook 設定失敗 (%d): %s", resp.status_code, resp.text[:200])
 
 
-def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
+def setup_gitlab_test_users(root_token: str, project_id: str, group_id: str = "") -> dict[str, str]:
     """GitLab にテストユーザーを作成し、PAT を発行してプロジェクトに追加する
 
     Args:
         root_token: GitLab 管理者 PAT
         project_id: テストユーザーを追加するプロジェクト ID
+        group_id: テストユーザーをオーナーとして追加するグループ ID（省略可）
 
     Returns:
         {username: user_pat} の辞書
@@ -474,6 +493,18 @@ def setup_gitlab_test_users(root_token: str, project_id: str) -> dict[str, str]:
             else:
                 logger.warning("GitLab テストユーザー '%s' のプロジェクト追加失敗 (%d): %s",
                                user["username"], member_resp.status_code, member_resp.text[:200])
+
+        # グループオーナーとして追加（Webhook・MR 操作に Owner 権限が必要なため）
+        if group_id:
+            group_resp = _gitlab_api("POST", f"/groups/{group_id}/members", root_token, json={
+                "user_id": user_id,
+                "access_level": 50,  # Owner
+            })
+            if group_resp.status_code in (201, 409):
+                logger.info("GitLab テストユーザー '%s' をグループオーナーに追加しました", user["username"])
+            else:
+                logger.warning("GitLab テストユーザー '%s' のグループ追加失敗 (%d): %s",
+                               user["username"], group_resp.status_code, group_resp.text[:200])
 
     return user_pats
 
@@ -637,18 +668,24 @@ def main() -> None:
         if not bot_pat:
             logger.warning("bot PAT が取得できませんでした")
 
+        # --- テスト用グループ ---
+        group_id = setup_test_group(root_token)
+        if not group_id:
+            logger.warning("テスト用グループの作成に失敗しました")
+
         # --- テスト用プロジェクト ---
-        project_id = setup_test_project(root_token, bot_user_id)
+        project_id = setup_test_project(root_token, bot_user_id, group_id)
         if not project_id:
             logger.warning("テスト用プロジェクトの作成に失敗しました")
         else:
             # --- ローカル Webhook リクエストを許可 ---
             allow_local_requests(root_token)
-            # --- Webhook 設定 ---
-            setup_webhook(root_token, project_id)
+            # --- Group Webhook 設定 ---
+            if group_id:
+                setup_group_webhook(root_token, group_id)
 
         # --- GitLab テストユーザー作成 ---
-        user_pats = setup_gitlab_test_users(root_token, project_id)
+        user_pats = setup_gitlab_test_users(root_token, project_id, group_id)
 
     # --- Virtual Key 発行 ---
     virtual_keys = setup_virtual_keys()

@@ -24,6 +24,7 @@ export default defineConfig({
   workers: 1,
   retries: 1,
   globalSetup: './global-setup.ts',
+  globalTeardown: './global-teardown.ts',
   use: {
     // docker-compose 内では frontend サービス名でアクセス
     baseURL: process.env.BASE_URL ?? 'http://frontend:80',

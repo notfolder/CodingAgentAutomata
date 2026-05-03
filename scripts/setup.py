@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 # SQLAlchemy
 from sqlalchemy import create_engine
@@ -66,52 +67,21 @@ def _hash_password(plain: str) -> str:
 # F-3 / F-4 初期プロンプトテンプレート
 # -----------------------------------------------------------------------
 
-F3_PROMPT_TEMPLATE = """\
-あなたはGitLabリポジトリのコーディングエージェントです。
-以下のIssueの内容を分析し、作業ブランチ名とMRタイトルを生成してください。
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "default-template"
 
-プロジェクト: {project_name}
-リポジトリURL: {repository_url}
 
-Issue タイトル: {issue_title}
+def _load_default_template(file_name: str) -> str:
+    """default-template 配下の Markdown テンプレートを読み込む。"""
+    template_path = _DEFAULT_TEMPLATE_DIR / file_name
+    if not template_path.exists():
+        logger.error("デフォルトテンプレートが見つかりません: %s", template_path)
+        sys.exit(1)
+    return template_path.read_text(encoding="utf-8")
 
-Issue 説明:
-{issue_description}
 
-Issue コメント:
-{issue_comments}
-
-以下の規則でブランチ名とMRタイトルを生成してください:
-- ブランチ名: feature/issue-{短い説明をkebab-caseで} 形式
-- MRタイトル: Draft: {Issue内容を簡潔に表したタイトル} 形式
-
-出力は必ず標準出力の最終行に以下のJSON形式のみで出力してください（他のテキストは最終行に含めないこと）:
-{{"branch_name": "feature/xxx", "mr_title": "Draft: xxx"}}
-"""
-
-F4_PROMPT_TEMPLATE = """\
-あなたはGitLabリポジトリのコーディングエージェントです。
-以下のMRの指示に従ってコード実装を行ってください。
-
-ブランチ: {branch_name}
-リポジトリURL: {repository_url}
-
-## 作業指示（MR Description）
-
-{mr_description}
-
-## コンテキスト（MRのコメント一覧）
-
-以下はMRに投稿されたコメントです。作業の参考にしてください。
-
-{mr_comments}
-
-## 作業ルール
-
-1. コードを変更したら、適切な区切りでコミットしてください
-2. すべての作業が完了したら、最終コミットを行い `git push` を実行してください
-3. テストがある場合は必ず実行し、すべてパスすることを確認してください
-"""
+F3_PROMPT_TEMPLATE = _load_default_template("f3_prompt_template.md")
+F4_PROMPT_TEMPLATE = _load_default_template("f4_prompt_template.md")
 
 # -----------------------------------------------------------------------
 # 組み込みCLIアダプタ設定
@@ -125,7 +95,9 @@ BUILTIN_ADAPTERS = [
         # cat コマンドで stdin 経由で渡すことでコマンドライン引数の長さ制限を回避する。
         # claude -p に引数を渡さない場合、stdin をプロンプトとして読み取る。
         "start_command_template": (
-            "cat /tmp/prompt.txt | claude -p --dangerously-skip-permissions "
+            "cat /tmp/prompt.txt | claude -p --verbose --include-partial-messages "
+            "--include-hook-events --output-format stream-json "
+            "--dangerously-skip-permissions "
             "--model {model} --mcp-config '{mcp_config}'"
         ),
         "env_mappings": json.dumps({
@@ -181,7 +153,20 @@ def setup(
                 {"cli_id": adapter["cli_id"]},
             ).fetchone()
             if existing:
-                logger.info("CLIアダプタ '%s' は既に登録済みです", adapter["cli_id"])
+                db.execute(
+                    __import__("sqlalchemy").text(
+                        "UPDATE cli_adapters "
+                        "SET container_image = :container_image, "
+                        "start_command_template = :start_command_template, "
+                        "env_mappings = :env_mappings, "
+                        "config_content_env = :config_content_env, "
+                        "is_builtin = :is_builtin, "
+                        "updated_at = :updated_at "
+                        "WHERE cli_id = :cli_id"
+                    ),
+                    {**adapter, "updated_at": now},
+                )
+                logger.info("CLIアダプタ '%s' を最新定義に同期しました", adapter["cli_id"])
             else:
                 db.execute(
                     __import__("sqlalchemy").text(

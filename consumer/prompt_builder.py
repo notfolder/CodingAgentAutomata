@@ -65,13 +65,14 @@ class PromptBuilder:
         issue_comments: str,
         project_name: str,
         repository_url: str,
+        existing_branches: str,
     ) -> str:
         """
         F-3（Issue→MR変換）用のプロンプトをテンプレートから生成する。
 
         DB の f3_prompt_template を取得して変数を展開する。
-        変数: {issue_title}, {issue_description}, {issue_comments},
-               {project_name}, {repository_url}
+         変数: {issue_title}, {issue_description}, {issue_comments},
+             {project_name}, {repository_url}, {existing_branches}
 
         Args:
             issue_title: Issue のタイトル
@@ -79,6 +80,7 @@ class PromptBuilder:
             issue_comments: Issue のコメント一覧（結合済みテキスト）
             project_name: GitLab プロジェクト名
             repository_url: リポジトリ URL
+            existing_branches: 既存ブランチ一覧（整形済みテキスト）
 
         Returns:
             str: 変数展開済みのプロンプト文字列
@@ -99,6 +101,7 @@ class PromptBuilder:
         prompt = prompt.replace("{issue_comments}", issue_comments)
         prompt = prompt.replace("{project_name}", project_name)
         prompt = prompt.replace("{repository_url}", repository_url)
+        prompt = prompt.replace("{existing_branches}", existing_branches)
 
         logger.debug("PromptBuilder.build_f3_prompt: issue_title='%s'", issue_title)
         return prompt
@@ -144,12 +147,40 @@ class PromptBuilder:
             template = system_template
             logger.debug("PromptBuilder.build_f4_prompt: システムデフォルトテンプレートを使用")
 
+        original_template: str = template
+
         # テンプレート変数を展開
         prompt: str = template
         prompt = prompt.replace("{mr_description}", mr_description)
         prompt = prompt.replace("{mr_comments}", mr_comments)
         prompt = prompt.replace("{branch_name}", branch_name)
         prompt = prompt.replace("{repository_url}", repository_url)
+
+        # 旧テンプレートや不完全なテンプレートでも実行内容が空にならないよう、
+        # 必須コンテキストが未記載なら末尾に補完する。
+        fallback_sections: list[str] = []
+        if "{branch_name}" not in original_template:
+            fallback_sections.append(f"## 対象ブランチ\n\n{branch_name}")
+        if "{repository_url}" not in original_template:
+            fallback_sections.append(f"## リポジトリURL\n\n{repository_url}")
+        if "{mr_description}" not in original_template:
+            fallback_sections.append(
+                "## 作業指示（MR Description）\n\n"
+                f"{mr_description or '記載なし'}"
+            )
+        if "{mr_comments}" not in original_template:
+            fallback_sections.append(
+                "## コンテキスト（MRコメント一覧）\n\n"
+                f"{mr_comments or 'コメントなし'}"
+            )
+
+        if fallback_sections:
+            prompt = (
+                f"{prompt.rstrip()}\n\n"
+                "---\n\n"
+                "以下は実行に必要な補足コンテキストです。必ず参照してください。\n\n"
+                + "\n\n".join(fallback_sections)
+            )
 
         logger.debug("PromptBuilder.build_f4_prompt: branch_name='%s'", branch_name)
         return prompt

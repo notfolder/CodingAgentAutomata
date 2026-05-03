@@ -21,6 +21,9 @@ RUN pip install --no-cache-dir -e /app/backend
 # セットアップスクリプトをコピー
 COPY scripts/setup.py /app/scripts/setup.py
 
+# デフォルトテンプレートをコピー
+COPY default-template/ /app/default-template/
+
 # 作業ディレクトリを backend に移動
 WORKDIR /app/backend
 

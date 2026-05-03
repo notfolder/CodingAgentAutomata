@@ -1,5 +1,25 @@
 # CodingAgentAutomata 変更詳細設計書（TTY入力待機検知 / Group Webhook運用 / LLM設定検証）
 
+## 0. 本書の位置づけ
+
+本書は、以下の変更要件を既存設計へ反映するための変更詳細設計である。
+
+- 要件変更1: TTY入力待機検知機能（eBPF + Tracee + DinD前提）
+- 要件変更2: Webhook運用要件（GitLab CE Group Webhook標準化）
+- 要件変更3: LLMキー・モデル設定（保存時バリデーション + 手入力継続）
+
+既存設計のうち変更がない項目は docs/detail_design.md を参照する。
+
+### 0.1 実装時の拘束条件（必須）
+
+- 実装時は必ず docs/ebpf-dind-investigation.md を事前に全文参照し、記載された実験結果と矛盾しないことを確認してから着手する。
+- 特に以下は必須前提とする。
+  - consumer が起動する cli-exec（DinD）配下で Tracee を別コンテナとして起動すること
+  - Tracee 起動時に --pid=host --cgroupns=host --privileged を満たすこと
+  - eBPF利用可否は BTF と CAP_BPF/CAP_PERFMON の確認結果で判定し、不足時は無効化継続すること
+
+---
+
 ## 1. 言語・フレームワーク
 
 ### 1.1 変更方針
@@ -19,6 +39,8 @@
 - API は /api 配下
 - フロントから /api 配下へリクエスト
 
+---コンテナ起動指示、TTY待機時強制終了 | 変更 |
+| consumer/CLIContainerManager | cli-exec起動後にgit config実行、Traceeコンテナ
 ## 2. システム構成
 
 ### 2.1 変更対象コンポーネント一覧
@@ -172,13 +194,20 @@ flowchart LR
 
 ユーザー編集画面（LLM設定領域）
 
-| 表示要素 | 内容 |
-|---|---|
-| 画面タイトル | ユーザー編集 |
-| LLMキー入力欄 | マスク表示で入力し、同一領域に検証結果を表示 |
-| 検証結果表示 | OK またはエラー理由を表示 |
-| モデル入力欄 | 単一入力欄を使用し、候補取得成功時のみサジェストを表示 |
-| 保存操作 | 保存ボタンとキャンセルボタンを表示 |
+```text
++------------------------------------------------------+
+| ユーザー編集                                          |
++------------------------------------------------------+
+| LLMキー: [**************************** ] [検証結果]   |
+| 検証結果: OK / エラー(理由)                          |
+|                                                      |
+| モデル: [ gpt-4o-mini______________________ ]         |
+|        （候補取得成功時は入力補完サジェスト表示）      |
+|        （候補取得失敗時はサジェスト非表示）            |
+|                                                      |
+| [保存]  [キャンセル]                                 |
++------------------------------------------------------+
+```
 
 ### 4.2 外部システム連携設計
 
@@ -380,14 +409,30 @@ sequenceDiagram
 
 ### 7.1 変更後ディレクトリ設計（差分のみ）
 
-| 配置 | 変更対象 |
-|---|---|
-| consumer | tty_wait_detector.py（新規）、ebpf_environment_checker.py（新規）、mr_processor.py（変更）、cli_container_manager.py（変更） |
-| producer | webhook_server.py（変更）、gitlab_event_handler.py（変更） |
-| backend/services | user_service.py（変更）、model_candidate_service.py（新規） |
-| backend/routers | users.py（変更） |
-| frontend/src/views | UserEditView.vue（変更） |
-| frontend/src/api | client.ts（変更） |
+```text
+consumer/
+├── tty_wait_detector.py             # 新規
+├── ebpf_environment_checker.py      # 新規
+├── mr_processor.py                  # 変更
+├── cli_container_manager.py         # 変更
+
+producer/
+├── webhook_server.py                # 変更
+├── gitlab_event_handler.py          # 変更
+
+backend/services/
+├── user_service.py                  # 変更
+├── model_candidate_service.py       # 新規
+
+backend/routers/
+├── users.py                         # 変更
+
+frontend/src/views/
+├── UserEditView.vue                 # 変更
+
+frontend/src/api/
+├── client.ts                        # 変更
+```
 
 ### 7.2 ファイル責務表（変更分）
 
@@ -575,3 +620,67 @@ sequenceDiagram
 
 ---
 
+## 12. 完全性チェック
+
+### 12.1 エンティティ網羅
+
+| エンティティ | CRUD/一覧/詳細/検索/状態 |
+|---|---|
+| tasks | C/R/U/D(論理)・一覧・詳細(履歴)・検索・状態遷移あり |
+| users | C/R/U/D・一覧・詳細・検索・状態管理あり |
+| system_settings | C/R/U・検索(キー単位) |
+| cli_adapters | C/R/U/D・一覧・検索 |
+
+### 12.2 エンティティと画面/API/クラス対応
+
+| エンティティ | 画面 | API | クラス |
+|---|---|---|---|
+| tasks | /tasks | /api/tasks | TaskService/TaskRepository |
+| users | /users系 | /api/users系 | UserService/UserRepository |
+| system_settings | /settings | /api/settings | SystemSettingsService |
+
+### 12.3 状態遷移
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending
+  pending --> running
+  running --> completed
+  running --> failed
+```
+
+### 12.4 不要要素と削除設計
+
+| 削除対象 | 削除理由 |
+|---|---|
+| Project Webhook固定運用前提 | Group Webhook標準化と矛盾し、運用負荷増大要因のため |
+| TTY待機時の自動入力継続方針 | 要件で禁止され、失敗即時終了が必須のため |
+
+### 12.5 MVP適合確認
+
+| 項目 | 判定 |
+|---|---|
+| 変更要件1 | 必須要件のみで構成し過剰機能なし |
+| 変更要件2 | Group Webhook標準化に限定し過剰な再送実装なし |
+| 変更要件3 | 保存時検証と継続性確保に限定 |
+
+---
+
+## 13. レビュー結果（自己レビュー）
+
+### 13.1 整合性レビュー
+
+- 要件変更1〜3の全項目に対応する設計章を配置し、要件漏れなしを確認
+- docs/ebpf-dind-investigation.md の前提（BTF/CAP判定、Tracee起動条件、DinD構成）と矛盾がないことを確認
+- 既存設計の /api 運用、既存DB構成、既存E2E方針との矛盾がないことを確認
+
+### 13.2 冗長性レビュー
+
+- eBPF判定、TTY判定、キー検証、Webhook重複判定を共通モジュール化する方針を明記
+- 同一意味の処理再実装を禁止し、配置先を明示
+- 削除可能要素を列挙し、不要前提を削除対象として明記
+
+### 13.3 残課題
+
+- 要件レベルの不足情報はなし
+- 実装時は docs/ebpf-dind-investigation.md の実行条件に従うこと

@@ -7,6 +7,7 @@
 - GET  /api/users/{username} (admin: 全員 / user: 自分のみ)
 - PUT  /api/users/{username} (admin: 全項目 / user: 制限項目のみ)
 - DELETE /api/users/{username} (admin)
+- GET  /api/users/{username}/model-candidates  モデル候補一覧取得
 """
 
 import logging
@@ -21,8 +22,11 @@ from backend.schemas.user import (
     UserUpdate,
     UserUpdateSelf,
 )
+from backend.repositories.user_repository import UserRepository
 from backend.services.auth_service import get_current_user, require_admin
+from backend.services.model_candidate_service import ModelCandidateService
 from backend.services.user_service import UserService
+from backend.services.virtual_key_service import VirtualKeyService
 from shared.database.database import get_db
 from shared.models.db import User
 
@@ -162,3 +166,75 @@ def delete_user(
     """
     service = UserService(db)
     service.delete_user(username)
+
+
+@router.get("/{username}/model-candidates", response_model=list[str])
+async def get_model_candidates(
+    username: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[str]:
+    """
+    対象ユーザーの Virtual Key を使用して利用可能なモデル候補一覧を取得する。
+
+    対象ユーザーの virtual_key_encrypted を復号し、
+    ModelCandidateService 経由で LiteLLM から候補を取得する。
+    取得に失敗した場合は空リストを返す。
+
+    Args:
+        username: モデル候補を取得する対象のユーザー名
+        current_user: 認証済みカレントユーザー
+        db: SQLAlchemy データベースセッション
+
+    Returns:
+        list[str]: モデル ID の文字列リスト。取得失敗時は空リスト
+    """
+    # 権限チェック: admin または自分自身のみアクセス可能
+    if current_user.role != "admin" and current_user.username != username:
+        logger.warning(
+            "get_model_candidates: 権限なし current_user=%s, target=%s",
+            current_user.username,
+            username,
+        )
+        return []
+
+    # ユーザーの Virtual Key を取得・復号する
+    service = UserService(db)
+    try:
+        user_response = service.get_user(username, current_user)
+    except Exception as exc:
+        logger.warning(
+            "get_model_candidates: ユーザー取得失敗 username=%s: %s",
+            username,
+            exc,
+        )
+        return []
+
+    # Virtual Key を復号して取得する
+    try:
+        repo = UserRepository(db)
+        user = repo.get_by_username(username)
+        if user is None or not user.virtual_key_encrypted:
+            return []
+        vk_service = VirtualKeyService()
+        plain_key = vk_service.decrypt(user.virtual_key_encrypted)
+    except Exception as exc:
+        logger.warning(
+            "get_model_candidates: Virtual Key 復号失敗 username=%s: %s",
+            username,
+            exc,
+        )
+        return []
+
+    # ModelCandidateService でモデル候補を取得する（失敗時は空リスト）
+    try:
+        candidate_service = ModelCandidateService()
+        models = await candidate_service.fetch_models(plain_key)
+        return models
+    except Exception as exc:
+        logger.warning(
+            "get_model_candidates: モデル候補取得失敗 username=%s: %s",
+            username,
+            exc,
+        )
+        return []

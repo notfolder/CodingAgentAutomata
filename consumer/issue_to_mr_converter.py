@@ -7,13 +7,15 @@ GitLab 上に Draft MR を作成する。
 
 import json
 import logging
-import uuid
+import re
+import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
 from shared.models.db import Task, User
+from shared.shutdown_state import is_shutdown_requested
 
 # ロガーを設定
 logger = logging.getLogger(__name__)
@@ -56,6 +58,148 @@ class IssueToMRConverter:
         self._virtual_key_service = virtual_key_service
         self._settings = settings
         self._db_session_factory: Callable[[], Session] = db_session_factory
+
+    def _extract_json_objects_from_text(self, text: str) -> list[dict]:
+        """
+        テキスト中から JSON オブジェクト断片を抽出して dict のリストを返す。
+
+        文字列リテラル中の波括弧は無視し、バランスした '{}' 区間を候補として
+        json.loads を試行する。
+        """
+        objects: list[dict] = []
+        depth = 0
+        start_idx: Optional[int] = None
+        in_string = False
+        escaped = False
+
+        for idx, ch in enumerate(text):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+
+            if ch == "{":
+                if depth == 0:
+                    start_idx = idx
+                depth += 1
+                continue
+
+            if ch == "}" and depth > 0:
+                depth -= 1
+                if depth == 0 and start_idx is not None:
+                    snippet = text[start_idx:idx + 1]
+                    try:
+                        parsed = json.loads(snippet)
+                        if isinstance(parsed, dict):
+                            objects.append(parsed)
+                    except json.JSONDecodeError:
+                        pass
+                    start_idx = None
+
+        return objects
+
+    def _extract_branch_mr_from_text(self, text: str) -> Optional[dict[str, str]]:
+        """
+        任意テキストから branch_name / mr_title を含む JSON を抽出する。
+
+        Claude の出力が説明文 + JSON コードブロックを含むケースにも対応する。
+        """
+        normalized = text.strip()
+        if not normalized:
+            return None
+
+        # まずは全文から JSON オブジェクト候補を抽出
+        objects = self._extract_json_objects_from_text(normalized)
+
+        # コードブロックがある場合はその中身も優先候補として追加
+        for match in re.finditer(
+            r"```(?:json)?\s*(\{[\s\S]*?\})\s*```",
+            normalized,
+            re.IGNORECASE,
+        ):
+            objects.extend(self._extract_json_objects_from_text(match.group(1)))
+
+        for obj in objects:
+            branch_name = obj.get("branch_name")
+            mr_title = obj.get("mr_title")
+            if isinstance(branch_name, str) and isinstance(mr_title, str):
+                branch_name = branch_name.strip()
+                mr_title = mr_title.strip()
+                if branch_name and mr_title:
+                    return {
+                        "branch_name": branch_name,
+                        "mr_title": mr_title,
+                    }
+
+        return None
+
+    def _extract_f3_result_from_cli_output(self, cli_output: str) -> Optional[dict[str, str]]:
+        """
+        F-3 CLI の生出力から branch_name / mr_title を抽出する。
+
+        対応フォーマット:
+        - 従来: 1行JSON（{"branch_name":..., "mr_title":...}）
+        - Claude stream-json: assistant/result イベント内 text に JSON を含む形式
+        """
+        lines: list[str] = [
+            line.strip() for line in cli_output.splitlines() if line.strip()
+        ]
+        if not lines:
+            return None
+
+        # 1) 従来フォーマット（行そのものが JSON）
+        for line in reversed(lines):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                branch_name = parsed.get("branch_name")
+                mr_title = parsed.get("mr_title")
+                if isinstance(branch_name, str) and isinstance(mr_title, str):
+                    if branch_name.strip() and mr_title.strip():
+                        return {
+                            "branch_name": branch_name.strip(),
+                            "mr_title": mr_title.strip(),
+                        }
+
+        # 2) stream-json フォーマット（assistant/result の text を解析）
+        text_candidates: list[str] = []
+        for line in lines:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+
+            event_type = event.get("type")
+            if event_type == "assistant":
+                message = event.get("message", {})
+                for block in message.get("content", []):
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if isinstance(text, str) and text.strip():
+                            text_candidates.append(text)
+            elif event_type == "result":
+                result_text = event.get("result", "")
+                if isinstance(result_text, str) and result_text.strip():
+                    text_candidates.append(result_text)
+
+        for text in reversed(text_candidates):
+            extracted = self._extract_branch_mr_from_text(text)
+            if extracted is not None:
+                return extracted
+
+        return None
 
     def _get_user(self, username: str) -> Optional[User]:
         """
@@ -155,6 +299,22 @@ class IssueToMRConverter:
             return "{}"
         return json.dumps({"mcpServers": mcp_config}, ensure_ascii=False)
 
+    def _build_run_once_script(self) -> str:
+        """
+        F-3 用 run --rm 単発実行スクリプトを返す。
+
+        各処理ステップの直前に "[STEP] 概要: ISO8601時刻" 形式のログを出力する。
+
+        起動前に /tmp/prompt.txt と /tmp/start_command.sh が書き込まれている前提。
+        """
+        return (
+            "set -eu\n"
+            "echo \"[STEP] スクリプト開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "echo \"[STEP] CLI実行開始: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+            "sh /tmp/start_command.sh\n"
+            "echo \"[STEP] CLI実行完了: $(date -u +%Y-%m-%dT%H:%M:%SZ)\"\n"
+        )
+
     def convert(
         self,
         task_uuid: str,
@@ -170,7 +330,7 @@ class IssueToMRConverter:
         3. プロンプト生成（PromptBuilder）
         4. CLI アダプタ解決
         5. CLI コンテナ起動（Virtual Key 環境変数セット）
-        6. CLI 実行・標準出力の最終行を JSON パース（branch_name, mr_title 取得）
+        6. CLI 実行・標準出力を解析して JSON 結果を抽出（branch_name, mr_title 取得）
         7. ブランチ作成
         8. Draft MR 作成（Issue の description を MR description に設定）
         9. Issue の author を MR の最初のレビュアーに設定
@@ -274,6 +434,14 @@ class IssueToMRConverter:
             repository_url: str = (
                 project_info.get("http_url_to_repo", "") if project_info else ""
             )
+            existing_branch_names: list[str] = self._gitlab_client.list_branches(
+                project_id, max_count=100
+            )
+            existing_branches: str = (
+                "\n".join(f"- {name}" for name in sorted(existing_branch_names))
+                if existing_branch_names
+                else "- (既存ブランチなし)"
+            )
 
             prompt: str = self._prompt_builder.build_f3_prompt(
                 issue_title=issue.get("title", ""),
@@ -281,6 +449,7 @@ class IssueToMRConverter:
                 issue_comments=issue_comments,
                 project_name=project_name,
                 repository_url=repository_url,
+                existing_branches=existing_branches,
             )
 
             # ==========================================
@@ -322,74 +491,110 @@ class IssueToMRConverter:
             )
 
             # ==========================================
-            # ステップ 5: CLI コンテナ起動
+            # ステップ 5: run --rm 単発コンテナ実行
             # ==========================================
             container_name: str = f"cli-exec-{user.default_cli}-{task_uuid}"
-            container_id = self._cli_container_manager.start_container(
+            run_script: str = self._build_run_once_script()
+            run_env_vars: dict[str, str] = {
+                **env_vars,
+            }
+            file_writes: dict[str, str] = {
+                "/tmp/prompt.txt": prompt,
+                "/tmp/start_command.sh": start_command,
+            }
+
+            container_id = self._cli_container_manager.run_container_once(
                 container_name=container_name,
                 image=adapter.container_image,
-                env_vars=env_vars,
-                command="sleep infinity",
+                env_vars=run_env_vars,
+                command=["/bin/sh", "-c", run_script],
+                file_writes=file_writes,
             )
             logger.info(
-                "IssueToMRConverter: コンテナを起動しました container_id=%s", container_id
+                "IssueToMRConverter: run_once コンテナを起動しました container_id=%s",
+                container_id,
             )
 
             # ==========================================
-            # ステップ 5.5: プロンプトをコンテナ内ファイルに書き込み
+            # ステップ 6: CLI 実行・標準出力を解析して JSON 結果を抽出
             # ==========================================
-            # コマンドライン引数の長さ制限を回避するため、プロンプトを
-            # コンテナ内の /tmp/prompt.txt にファイルとして書き込む。
-            # start_command_template は cat /tmp/prompt.txt でこのファイルを読み取る。
-            self._cli_container_manager.write_file(
-                container_id, "/tmp/prompt.txt", prompt
+            logger.debug("IssueToMRConverter: start_command=%r", start_command)
+            output_chunks: list[str] = []
+            stdout_stream = self._cli_container_manager.get_stdout_stream(container_id)
+            stream_done = threading.Event()
+
+            def _read_stream() -> None:
+                """ストリームを別スレッドで読み取る（ブロッキングI/Oをメインスレッドから分離）。"""
+                try:
+                    for chunk in stdout_stream:
+                        if not chunk:
+                            continue
+                        text = chunk.decode("utf-8", errors="replace")
+                        output_chunks.append(text)
+                        # F-3 CLI の出力を consumer の標準出力にリアルタイムで転送する
+                        for line in text.splitlines():
+                            print(line, flush=True)
+                except Exception as exc:
+                    logger.debug(
+                        "IssueToMRConverter: stdout ストリーム読み取り終了 container_id=%s: %s",
+                        container_id,
+                        exc,
+                    )
+                finally:
+                    stream_done.set()
+
+            stream_thread = threading.Thread(
+                target=_read_stream,
+                name=f"f3-cli-log-{task_uuid}",
+                daemon=True,
             )
-            logger.debug(
-                "IssueToMRConverter: プロンプトファイルを書き込みました size=%d", len(prompt)
+            stream_thread.start()
+
+            exit_code = self._cli_container_manager.wait_container_exit(
+                container_id,
+                self._settings.cli_exec_timeout_sec,
             )
 
-            # ==========================================
-            # ステップ 6: CLI 実行・標準出力の最終行を JSON パース
-            # ==========================================
-            # exec_run でコンテナ内にてコマンドを実行（ENTRYPOINT をバイパス）
-            import docker
-            container = self._cli_container_manager._client.containers.get(
-                container_id
-            )
-            logger.debug(
-                "IssueToMRConverter: start_command=%r", start_command
-            )
-            exec_result = container.exec_run(
-                cmd=["/bin/sh", "-c", start_command],
-                stdout=True,
-                stderr=True,
-                stream=False,
-            )
-            cli_output: str = exec_result.output.decode("utf-8", errors="replace") if exec_result.output else ""
-            # コンテナを停止
-            container.stop(timeout=5)
+            # コンテナ終了後、ストリームの自然終了を最大5秒待機する
+            # 終わらない場合は close() を別スレッドで呼び出してタイムアウト付きで強制終了する
+            if not stream_done.wait(timeout=5):
+                logger.debug(
+                    "IssueToMRConverter: stdout ストリームが終了しないため強制 close します container_id=%s",
+                    container_id,
+                )
+                close_fn = getattr(stdout_stream, "close", None)
+                if callable(close_fn):
+                    close_thread = threading.Thread(target=close_fn, daemon=True)
+                    close_thread.start()
+                    close_thread.join(timeout=10)
+                    if close_thread.is_alive():
+                        logger.warning(
+                            "IssueToMRConverter: stdout ストリーム close がタイムアウトしました（無視）container_id=%s",
+                            container_id,
+                        )
+                # close 後にスレッドが終了するのを最大2秒待つ
+                stream_done.wait(timeout=2)
+
+            cli_output: str = "".join(output_chunks)
             logger.debug(
                 "IssueToMRConverter: CLI 出力 exit_code=%s output=%r",
-                exec_result.exit_code,
+                exit_code,
                 cli_output[:500],
             )
 
-            # 最終行を JSON パース（branch_name, mr_title を取得）
-            lines: list[str] = [
-                line.strip() for line in cli_output.splitlines() if line.strip()
-            ]
+            if exit_code != 0:
+                raise ValueError(
+                    f"CLI が非ゼロ終了コードで終了しました（exit={exit_code}）: {cli_output[:500]}"
+                )
+
+            # CLI 出力から branch_name / mr_title を抽出
+            lines: list[str] = [line.strip() for line in cli_output.splitlines() if line.strip()]
             if not lines:
                 raise ValueError("CLI が出力を生成しませんでした。")
 
-            result_json: dict | None = None
-            for line in reversed(lines):
-                try:
-                    parsed = json.loads(line)
-                    if isinstance(parsed, dict) and "branch_name" in parsed:
-                        result_json = parsed
-                        break
-                except json.JSONDecodeError:
-                    continue
+            result_json: Optional[dict[str, str]] = self._extract_f3_result_from_cli_output(
+                cli_output
+            )
             if result_json is None:
                 last_line: str = lines[-1] if lines else ""
                 raise ValueError(
@@ -411,6 +616,9 @@ class IssueToMRConverter:
                 branch_name,
                 mr_title,
             )
+
+            if is_shutdown_requested():
+                raise RuntimeError("シャットダウン要求のため F-3 後処理を中断しました。")
 
             # ==========================================
             # ステップ 7: ブランチ作成
@@ -540,34 +748,35 @@ class IssueToMRConverter:
                 exc_info=True,
             )
             # GitLab Issue にエラーコメントを投稿
-            try:
-                self._gitlab_client.create_issue_note(
-                    project_id=project_id,
-                    iid=issue_iid,
-                    body=(
-                        "❌ F-3 処理中にエラーが発生しました。\n\n"
-                        f"Task ID: `{task_uuid}`\n\n"
-                        f"```\n{error_msg}\n```"
-                    ),
-                )
-                # 処理中ラベルを削除
-                issue_data: Optional[dict] = self._gitlab_client.get_issue(
-                    project_id, issue_iid
-                )
-                if issue_data:
-                    labels_to_restore: list[str] = [
-                        lbl
-                        for lbl in issue_data.get("labels", [])
-                        if lbl != self._settings.gitlab_processing_label
-                    ]
-                    self._gitlab_client.update_issue_labels(
-                        project_id, issue_iid, labels_to_restore
+            if not is_shutdown_requested():
+                try:
+                    self._gitlab_client.create_issue_note(
+                        project_id=project_id,
+                        iid=issue_iid,
+                        body=(
+                            "❌ F-3 処理中にエラーが発生しました。\n\n"
+                            f"Task ID: `{task_uuid}`\n\n"
+                            f"```\n{error_msg}\n```"
+                        ),
                     )
-            except Exception as gitlab_exc:
-                logger.warning(
-                    "IssueToMRConverter: GitLab エラーコメント投稿失敗（無視）: %s",
-                    gitlab_exc,
-                )
+                    # 処理中ラベルを削除
+                    issue_data: Optional[dict] = self._gitlab_client.get_issue(
+                        project_id, issue_iid
+                    )
+                    if issue_data:
+                        labels_to_restore: list[str] = [
+                            lbl
+                            for lbl in issue_data.get("labels", [])
+                            if lbl != self._settings.gitlab_processing_label
+                        ]
+                        self._gitlab_client.update_issue_labels(
+                            project_id, issue_iid, labels_to_restore
+                        )
+                except Exception as gitlab_exc:
+                    logger.warning(
+                        "IssueToMRConverter: GitLab エラーコメント投稿失敗（無視）: %s",
+                        gitlab_exc,
+                    )
             self._update_task_status(
                 task_uuid, "failed", error_message=error_msg
             )

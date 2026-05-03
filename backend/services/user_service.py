@@ -5,6 +5,8 @@
 Virtual Key の暗号化/復号、パスワードハッシュ化もここで行う。
 """
 
+import asyncio
+import concurrent.futures
 import logging
 from typing import Optional
 
@@ -20,6 +22,7 @@ from backend.schemas.user import (
     UserUpdateSelf,
 )
 from backend.services.auth_service import AuthService
+from backend.services.model_candidate_service import ModelCandidateService
 from backend.services.virtual_key_service import VirtualKeyService
 from shared.models.db import User
 
@@ -86,6 +89,41 @@ class UserService:
         self._db = db
         self._repo = UserRepository(db)
         self._vk_service = VirtualKeyService()
+
+    def _validate_virtual_key(self, key: str) -> None:
+        """
+        Virtual Key を LiteLLM エンドポイントで検証する。
+
+        検証に失敗した場合は HTTPException(400) を送出する。
+        LiteLLM エンドポイントへの接続自体に失敗した場合も 400 を送出する。
+
+        Args:
+            key: 検証対象の Virtual Key
+
+        Raises:
+            HTTPException 400: キー検証失敗時
+        """
+        service = ModelCandidateService()
+
+        def _run() -> tuple[bool, str]:
+            """別スレッドで非同期検証を実行する。"""
+            return asyncio.run(service.validate_key(key))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run)
+            try:
+                is_valid, error_reason = future.result(timeout=15.0)
+            except concurrent.futures.TimeoutError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="LLMキーの検証に失敗しました: 接続タイムアウト",
+                )
+
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"LLMキーの検証に失敗しました: {error_reason}",
+            )
 
     def list_users(
         self,
@@ -236,6 +274,8 @@ class UserService:
             user.email = data.email
 
         if data.virtual_key is not None:
+            # Virtual Key を保存前に LiteLLM エンドポイントで検証する
+            self._validate_virtual_key(data.virtual_key)
             # Virtual Key を再暗号化
             user.virtual_key_encrypted = self._vk_service.encrypt(data.virtual_key)
 
