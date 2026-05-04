@@ -378,6 +378,98 @@ def setup_test_project(root_token: str, bot_user_id: str, group_id: str) -> str:
     return project_id
 
 
+def get_or_create_admin_pat() -> str:
+    """管理者用 PAT を取得する（環境変数優先・自動生成フォールバック）
+
+    優先順位:
+      1. 環境変数 GITLAB_ADMIN_PAT
+      2. 環境変数 GITLAB_ADMIN_TOKEN（後方互換）
+      3. docker exec 経由の自動生成
+
+    Returns:
+        管理者用 PAT 文字列。取得失敗時は空文字列を返す
+    """
+    # GITLAB_ADMIN_PAT を最優先で確認する
+    admin_pat = os.environ.get("GITLAB_ADMIN_PAT", "")
+    if admin_pat:
+        logger.info("環境変数 GITLAB_ADMIN_PAT を使用します")
+        return admin_pat
+
+    # 後方互換として GITLAB_ADMIN_TOKEN を参照する
+    # ※ GITLAB_ADMIN_TOKEN は旧バージョンで root PAT 用途として使用されていた環境変数。
+    #    GITLAB_ADMIN_PAT に移行済みの環境では不要となるが、既存環境での継続動作を
+    #    保証するために参照する。新規環境では GITLAB_ADMIN_PAT を使用すること。
+    admin_token = os.environ.get("GITLAB_ADMIN_TOKEN", "")
+    if admin_token:
+        logger.info("環境変数 GITLAB_ADMIN_TOKEN を管理者用 PAT として使用します（後方互換）")
+        return admin_token
+
+    # 未設定の場合は docker exec 経由で PAT を自動生成する
+    logger.info("GITLAB_ADMIN_PAT 未設定のため docker exec 経由で管理者用 PAT を取得します")
+    return get_root_token_via_docker()
+
+
+def setup_system_hook(admin_pat: str) -> None:
+    """System Hook を照合して冪等登録する（テスト環境セットアップ用）
+
+    GitLab 管理 API の GET /api/v4/hooks で既存の System Hook 一覧を取得し、
+    url・issues_events・merge_requests_events が全て一致する設定が存在しない場合のみ
+    POST /api/v4/hooks で新規登録する。
+
+    Args:
+        admin_pat: GitLab 管理者用 Personal Access Token
+    """
+    # 既存 System Hook 一覧を取得する
+    list_resp = _gitlab_api("GET", "/hooks", admin_pat)
+    if list_resp.status_code != 200:
+        logger.warning(
+            "System Hook 一覧取得失敗 (%d): %s",
+            list_resp.status_code,
+            list_resp.text[:200],
+        )
+        return
+
+    existing_hooks = list_resp.json() if isinstance(list_resp.json(), list) else []
+
+    # url・issues_events・merge_requests_events の三条件で照合する
+    target_hook = next(
+        (
+            h for h in existing_hooks
+            if h.get("url") == WEBHOOK_URL
+            and h.get("issues_events") is True
+            and h.get("merge_requests_events") is True
+        ),
+        None,
+    )
+
+    if target_hook:
+        logger.info(
+            "既存の System Hook を再利用します: %s (id=%s)",
+            WEBHOOK_URL,
+            target_hook.get("id"),
+        )
+        return
+
+    # 一致する設定が存在しない場合は新規登録する
+    payload = {
+        "url": WEBHOOK_URL,
+        "token": GITLAB_WEBHOOK_SECRET,
+        "issues_events": True,
+        "merge_requests_events": True,
+        "push_events": False,
+        "enable_ssl_verification": False,
+    }
+    resp = _gitlab_api("POST", "/hooks", admin_pat, json=payload)
+    if resp.status_code == 201:
+        logger.info("System Hook を新規登録しました: %s", WEBHOOK_URL)
+    else:
+        logger.warning(
+            "System Hook 登録失敗 (%d): %s",
+            resp.status_code,
+            resp.text[:200],
+        )
+
+
 def allow_local_requests(root_token: str) -> None:
     """GitLab 管理者設定でローカルネットワークへの Webhook リクエストを許可する"""
     resp = _gitlab_api("PUT", "/application/settings", root_token, json={
@@ -680,9 +772,12 @@ def main() -> None:
         else:
             # --- ローカル Webhook リクエストを許可 ---
             allow_local_requests(root_token)
-            # --- Group Webhook 設定 ---
-            if group_id:
-                setup_group_webhook(root_token, group_id)
+            # --- System Hook 設定（管理者用 PAT を取得して冪等登録） ---
+            admin_pat = get_or_create_admin_pat()
+            if admin_pat:
+                setup_system_hook(admin_pat)
+            else:
+                logger.warning("管理者用 PAT の取得に失敗したため System Hook 登録をスキップします")
 
         # --- GitLab テストユーザー作成 ---
         user_pats = setup_gitlab_test_users(root_token, project_id, group_id)

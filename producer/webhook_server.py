@@ -81,7 +81,7 @@ class WebhookServer:
         token = request.headers.get("X-Gitlab-Token", "")
         expected = self._settings.gitlab_webhook_secret
 
-        # X-Gitlab-Event ヘッダーを取得してログに記録する（Group Webhook 標準化）
+        # X-Gitlab-Event ヘッダーを取得してログに記録する（System Hook）
         gitlab_event = request.headers.get("X-Gitlab-Event", "")
         logger.info(
             "WebhookServer: Webhook 受信 event=%s, remote=%s",

@@ -1,4 +1,4 @@
-# CodingAgentAutomata 変更詳細設計書（TTY入力待機検知 / Group Webhook運用 / LLM設定検証）
+# CodingAgentAutomata 変更詳細設計書（TTY入力待機検知 / System Hook 運用 / LLM設定検証）
 
 ## 1. 言語・フレームワーク
 
@@ -8,7 +8,7 @@
 |---|---|---|---|
 | バックエンド | Python 3.12 / FastAPI | 変更なし | 既存資産を維持し、機能追加のみで要件を満たせるため |
 | Consumer 実行形態 | 通常コンテナ | DinDベースコンテナへ変更（eBPF利用条件を満たす） | TTY待機検知を成立させる必須前提 |
-| Webhook運用 | Project Webhook前提が混在 | Group Webhook標準へ統一 | 運用集約と設定漏れ低減 |
+| Webhook運用 | Project Webhook前提が混在 | MR 検出は System Hook 標準へ統一。Issue 検出はポーリングを継続 | GitLab CE 対応と設定漏れ低減 |
 | フロントエンド | Vue3 + Vuetify | 変更なし（設定画面に検証UIを追加） | GUI追加不要で既存画面拡張で対応可能 |
 
 ### 1.2 フロント/バックの接続
@@ -28,7 +28,7 @@
 | consumer | DinD実行前提、eBPF初期化判定、Tracee監視、TTY待機時強制終了 | 変更 |
 | consumer/CLIContainerManager | cli-exec起動後にgit config実行、Tracee管理APIを追加 | 変更 |
 | consumer/MRProcessor | TTY検知イベント統合、失敗報告拡張 | 変更 |
-| producer/WebhookServer | Group Webhookイベント取り込みを標準化 | 変更 |
+| producer/WebhookServer | System Hook イベント取り込みを標準化 | 変更 |
 | producer/GitLabEventHandler | Idempotency-Keyによる重複受信防御 | 変更 |
 | backend/users settings API | LLMキー保存時バリデーション導入 | 変更 |
 | frontend 設定画面 | モデル候補表示 + 手入力許可 + 保存時エラー表示 | 変更 |
@@ -39,7 +39,7 @@
 
 ```mermaid
 flowchart TD
-    GL[GitLab CE Group Webhook]
+    GL[GitLab CE System Hook]
     PR[producer]
     MQ[RabbitMQ tasks]
     CS[consumer DinD]
@@ -66,7 +66,7 @@ flowchart TD
 
 | 送信元 | 送信先 | I/F | 主データ |
 |---|---|---|---|
-| GitLab | producer | HTTPS POST (Group Webhook) | イベント payload + Idempotency-Key |
+| GitLab | producer | HTTPS POST (System Hook) | イベント payload + Idempotency-Key |
 | producer | RabbitMQ | AMQP | task message |
 | consumer | cli-exec | Docker API | 起動コマンド、環境変数、prompt |
 | consumer | tracee | Docker API | tracee起動/停止、イベント取得 |
@@ -184,7 +184,7 @@ flowchart LR
 
 | 外部システム | 連携内容 | 変更点 |
 |---|---|---|
-| GitLab Group Webhook | Issue/MRイベント受信 | Project固定依存を廃止 |
+| GitLab System Hook | MR更新イベント受信（Issue検出はポーリング継続） | GitLab CE 対応・インスタンス全体設定に変更 |
 | GitLab REST API | コメント投稿、MR/Issue取得 | TTY検知失敗文言を追加 |
 | LiteLLM/Model APIs | キー検証、モデル候補取得 | 保存時検証導入 |
 | Linuxカーネル(eBPF) | Traceeでread(2)監視 | DinD前提で導入 |
@@ -193,7 +193,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-  participant GL as GitLab Group Webhook
+  participant GL as GitLab System Hook
   participant PR as Producer
   participant MQ as RabbitMQ
   participant CS as Consumer
@@ -233,11 +233,11 @@ flowchart TD
   L --> M
 ```
 
-#### 4.4.2 Group Webhook処理フロー
+#### 4.4.2 System Hook 処理フロー
 
 ```mermaid
 flowchart TD
-  A[Group Webhook受信] --> B[署名検証]
+  A[System Hook 受信] --> B[署名検証]
   B --> C[Idempotency-Key重複判定]
   C -->|重複| D[再処理せず2xx]
   C -->|新規| E[task投入]
@@ -247,8 +247,8 @@ flowchart TD
 
 #### 4.4.3 バッチ/定期処理
 
-- 既存ポーリング処理は継続
-- Webhook運用を主とし、ポーリングは補助（障害時補完）
+- 既存ポーリング処理は継続（Issue 検出に使用）
+- MR 検出は System Hook を主方式とする。Issue 検出はポーリングを継続する
 
 ### 4.5 トランザクション境界・ロールバック条件
 
@@ -273,7 +273,7 @@ flowchart TD
 |---|---|---|---|
 | PUT /api/users/{username} | LLMキー、モデル | 200 + 保存済み設定 | 400(検証失敗), 403, 404, 422 |
 | GET /api/users/{username}/model-candidates | LLMキー | 200 + 候補一覧 | 400(キー不正), 502(外部取得失敗) |
-| POST /webhook | Group Webhook payload | 200/202 | 403(署名不正), 400(payload不備) |
+| POST /webhook | System Hook payload | 200/202 | 403(署名不正), 400(payload不備) |
 
 エラー仕様の追加方針:
 
@@ -293,7 +293,7 @@ flowchart TD
 | EBPFEnvironmentChecker（新規） | BTF/CAP判定 | ○ | ○ | ○ | ○ | ○ |
 | CLIContainerManager（変更） | git config設定、TTY監視開始/停止連携 | ○ | ○ | ○ | ○ | ○ |
 | MRProcessor（変更） | TTY検知失敗時の制御統合 | ○ | ○ | ○ | ○ | ○ |
-| GitLabEventHandler（変更） | Group Webhook + Idempotency判定 | ○ | ○ | ○ | ○ | ○ |
+| GitLabEventHandler（変更） | System Hook + Idempotency判定 | ○ | ○ | ○ | ○ | ○ |
 | UserService（変更） | LLMキー保存時検証 | ○ | ○ | ○ | ○ | ○ |
 | ModelCandidateService（新規） | モデル候補取得 | ○ | ○ | ○ | ○ | ○ |
 
@@ -327,7 +327,7 @@ classDiagram
 
 | メッセージ | 送信元 | 宛先 | 内容 |
 |---|---|---|---|
-| WebhookReceived | GitLab | Producer | Group Webhookイベント |
+| WebhookReceived | GitLab | Producer | System Hook イベント |
 | TaskQueued | Producer | RabbitMQ | 非同期実行要求 |
 | TTYWaitDetected | TTYWaitDetector | MRProcessor | tty_read_wait 検知通知 |
 | TaskFailedReported | MRProcessor | GitLab | 失敗コメント投稿 |
@@ -370,6 +370,7 @@ sequenceDiagram
 | 認証 | 既存JWT継続 |
 | 認可 | 既存ロール制御継続 |
 | Webhook検証 | Secretトークン検証を維持 |
+| PAT分離 | bot操作用 `GITLAB_PAT` と System Hook 登録用 `GITLAB_ADMIN_PAT` を別環境変数で分離 |
 | 監査ログ | タスク失敗記録にTTY検知根拠を追加 |
 | 機密情報保護 | CLILogMaskerを継続適用 |
 | DinD権限 | --privileged前提で運用し、利用者を信頼境界内に限定 |
@@ -437,17 +438,17 @@ sequenceDiagram
 | UT-TTY-02 | 単体 | F-5.3 | tty_read_wait判定 |
 | UT-TTY-03 | 単体 | F-5.4 | 検知時強制終了呼び出し |
 | IT-TTY-01 | 結合 | F-5.5/F-5.6 | failedコメント + tasks更新 |
-| IT-WB-01 | 結合 | WB-1 | Group Webhook受信 |
+| IT-WB-01 | 結合 | WB-1 | System Hook 受信 |
 | IT-WB-02 | 結合 | WB-3 | Idempotency-Key重複抑止 |
 | UT-LLM-01 | 単体 | C-1 | 無効キー保存拒否 |
 | IT-LLM-01 | 結合 | C-3/C-4 | 候補取得失敗時手入力継続 |
 | E2E-C-01 | E2E | C-1〜C-4 | ユーザー設定画面操作 |
 | E2E-TTY-01 | E2E | TS-5.6 | TTY待機検知でfailed |
-| E2E-WB-01 | E2E | TS-WB-1 | Group Webhook経由処理 |
+| E2E-WB-01 | E2E | TS-WB-1 | System Hook 経由処理 |
 
 ### 8.3 正常/異常網羅
 
-- 正常: 検知有効で通常完了、Group Webhook通常処理、LLM設定正常保存
+- 正常: 検知有効で通常完了、System Hook 通常処理、LLM設定正常保存
 - 異常: eBPF無効、TTY待機検知、署名不正、重複受信、キー不正、候補取得失敗
 
 ---
@@ -461,13 +462,13 @@ sequenceDiagram
 | 起動方式 | docker compose を継続 |
 | 初期化 | backend起動時マイグレーション継続 |
 | consumer前提 | DinD実行条件を満たすイメージ/権限で起動 |
-| README反映 | 起動手順、TTY検知前提、Group Webhook設定手順を記載する |
+| README反映 | 起動手順、TTY検知前提、System Hook 設定手順を記載する |
 
 ### 9.2 運用ルール
 
 | ルール | 内容 |
 |---|---|
-| Group Webhook | 対象グループにOwner権限で設定管理 |
+| System Hook | GitLab 管理者がインスタンス全体に一度設定管理（管理者用 PAT 必須） |
 | 再送方針 | 受信失敗時はGitLab再送を利用 |
 | TTY検知運用 | eBPF不可時は無効化継続しWARNING監視 |
 
@@ -546,15 +547,15 @@ sequenceDiagram
 | TS-A-5 | F-3テンプレート記載例反映確認 | F-3テンプレート設定済み | テンプレート本文を確認する | Issue起点生成と問い合わせ禁止の記載が含まれる |
 | TS-A-6 | F-4テンプレート記載例反映確認 | F-4テンプレート設定済み | テンプレート本文を確認する | git_clone_path、問い合わせ禁止、TTY待機時failedが含まれる |
 
-### 11.5 E2Eシナリオ詳細（Group Webhook運用）
+### 11.5 E2Eシナリオ詳細（System Hook 運用）
 
 | シナリオID | テスト目的 | 前提条件 | テスト手順 | 期待される結果 |
 |---|---|---|---|---|
-| TS-WB-1 | Group Webhook受信確認 | Group Webhook設定済み | グループ配下プロジェクトでIssue更新を発生させる | 受信APIがイベント受信し対象を特定する |
-| TS-WB-2 | 複数プロジェクト一元受信確認 | グループ配下に複数プロジェクト | 複数プロジェクトでIssue/MR更新を発生させる | 単一Group Webhookで全イベントを受信する |
-| TS-WB-3 | 非同期処理分離確認 | 通常イベント送信可能 | 受信APIへイベント送信し応答時間を測定する | 受信APIは短時間で2xxを返却する |
-| TS-WB-4 | 重複受信抑止確認 | 同一イベント再送を再現可能 | 同一Idempotency-Keyイベントを複数回送信する | 重複イベントが再処理されない |
-| TS-WB-5 | 受信失敗時記録確認 | 受信失敗再現可能 | 受信失敗ケースを発生させる | WARNINGログを記録し、再送はGitLab側へ委譲する |
+| TS-WB-1 | System Hook 受信確認 | System Hook 設定済み | プロジェクトで MR 更新を発生させる | 受信 API がイベント受信し対象を特定する |
+| TS-WB-2 | 複数プロジェクト一元受信確認 | System Hook が登録済み | 複数プロジェクトで MR 更新を発生させる | 単一 System Hook で全イベントを受信する |
+| TS-WB-3 | 非同期処理分離確認 | 通常イベント送信可能 | 受信 API へイベント送信し応答時間を測定する | 受信 API は短時間で 2xx を返却する |
+| TS-WB-4 | 重複受信抑止確認 | 同一イベント再送を再現可能 | 同一 Idempotency-Key イベントを複数回送信する | 重複イベントが再処理されない |
+| TS-WB-5 | 受信失敗時記録確認 | 受信失敗再現可能 | 受信失敗ケースを発生させる | WARNING ログを記録し、再送は GitLab 側へ委譲する |
 
 ### 11.6 E2Eシナリオ詳細（LLMキー・モデル設定）
 
