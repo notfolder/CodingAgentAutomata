@@ -1,5 +1,7 @@
 # CodingAgentAutomata
 
+![CodingAgentAutomata](./AutomataCodex.svg)
+
 GitLab の Issue／MR を検出し、Claude Code や opencode などの CLI エージェントを自動実行するシステムです。
 
 ## システム概要
@@ -160,6 +162,7 @@ cp .env.example .env
 |---|---|
 | `GITLAB_PAT` | GitLab bot アカウントの Personal Access Token |
 | `GITLAB_API_URL` | GitLab の API URL（例: `http://gitlab:80`） |
+| `GITLAB_API_URL_INTERNAL` | コンテナ内通信で利用する GitLab API URL（未設定時は `GITLAB_API_URL` を使用） |
 | `GITLAB_BOT_NAME` | bot アカウントのユーザー名 |
 | `DATABASE_URL` | PostgreSQL 接続文字列 |
 | `RABBITMQ_URL` | RabbitMQ AMQP 接続 URL |

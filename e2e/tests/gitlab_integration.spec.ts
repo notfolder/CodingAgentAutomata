@@ -22,7 +22,7 @@
  *
  * 前提条件:
  *   - docker compose --profile test up -d で GitLab CE が起動済み
- *   - GITLAB_API_URL 環境変数に GitLab の URL（例: http://localhost:8929）
+ *   - GITLAB_API_URL_INTERNAL または GITLAB_API_URL 環境変数に GitLab の URL
  *   - GITLAB_ADMIN_TOKEN 環境変数に GitLab 管理者 PAT
  *   - GITLAB_BOT_LABEL 環境変数にトリガーラベル名（デフォルト: "coding agent"）
  *   - GITLAB_BOT_NAME 環境変数に bot のユーザー名（デフォルト: "coding-agent-bot"）
@@ -36,7 +36,8 @@ import { test, expect, request as playwrightRequest } from '@playwright/test';
 // 設定定数（環境変数から取得）
 // -----------------------------------------------------------------------
 
-const GITLAB_API_URL = process.env.GITLAB_API_URL ?? 'http://localhost:8929';
+const GITLAB_API_URL =
+  process.env.GITLAB_API_URL_INTERNAL ?? process.env.GITLAB_API_URL ?? 'http://localhost:8929';
 const GITLAB_ADMIN_TOKEN = process.env.GITLAB_ADMIN_TOKEN ?? '';
 // テストユーザー（testuser-claude）の GitLab PAT。Issue 作成者として backend の users テーブルに存在するユーザーを使う
 const GITLAB_USER_TOKEN = process.env.GITLAB_USER_TOKEN ?? '';

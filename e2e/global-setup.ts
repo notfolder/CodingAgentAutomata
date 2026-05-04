@@ -34,7 +34,8 @@ async function purgeRabbitMQQueue(): Promise<void> {
 }
 
 async function globalSetup(): Promise<void> {
-  const GITLAB_API_URL = process.env.GITLAB_API_URL ?? 'http://gitlab:8929';
+  const GITLAB_API_URL =
+    process.env.GITLAB_API_URL_INTERNAL ?? process.env.GITLAB_API_URL ?? 'http://gitlab:8929';
   const GITLAB_ADMIN_TOKEN = process.env.GITLAB_ADMIN_TOKEN ?? '';
   const GITLAB_PROJECT_ID = process.env.GITLAB_PROJECT_ID ?? '';
 

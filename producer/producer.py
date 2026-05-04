@@ -65,7 +65,7 @@ async def main() -> None:
     # GitLab クライアントの初期化
     gitlab_client = GitLabClient(
         pat=settings.gitlab_pat,
-        api_url=settings.gitlab_api_url,
+        api_url=settings.resolved_gitlab_api_url(),
     )
 
     # RabbitMQ クライアントの初期化と接続

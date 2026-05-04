@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # GitLab インスタンスのベースURL
     gitlab_api_url: str = "https://gitlab.com"
 
+    # GitLab コンテナ内部通信用ベースURL（未設定時は gitlab_api_url を使用）
+    gitlab_api_url_internal: str = ""
+
     # GitLab上のBotアカウントのユーザー名
     gitlab_bot_name: str = ""
 
@@ -112,6 +115,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     # CLI 実行タイムアウト（秒）
     cli_exec_timeout_sec: int = 10800
+
+    def resolved_gitlab_api_url(self) -> str:
+        """
+        実行時に利用する GitLab API URL を返す。
+
+        Returns:
+            str: internal URL が設定されていればそれを優先し、未設定時は external URL
+        """
+        return self.gitlab_api_url_internal or self.gitlab_api_url
 
 
 def get_settings() -> Settings:

@@ -210,8 +210,8 @@ class MRProcessor:
         http_url: str = project_info.get("http_url_to_repo", "")
         parsed = urlparse(http_url)
         # CLIコンテナはDockerネットワーク内で動作するため、外部URL（localhost等）ではなく
-        # 内部URL（settings.gitlab_api_url）のホスト/ポートを使用する
-        api_parsed = urlparse(self._settings.gitlab_api_url)
+        # 内部URL（settings.resolved_gitlab_api_url()）のホスト/ポートを使用する
+        api_parsed = urlparse(self._settings.resolved_gitlab_api_url())
         # oauth2:PAT@内部ホスト 形式で URL を再構築
         clone_url: str = (
             f"{api_parsed.scheme}://oauth2:{pat}@{api_parsed.netloc}{parsed.path}"

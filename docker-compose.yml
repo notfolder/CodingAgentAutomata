@@ -82,6 +82,11 @@ services:
     restart: always
     env_file:
       - .env
+      - path: .env.test
+        required: false
+    environment:
+      # コンテナ内から到達可能なDockerサービス名を内部通信用URLとして設定
+      GITLAB_API_URL_INTERNAL: http://gitlab:8929
     ports:
       - "8000:8000"
     depends_on:
@@ -124,8 +129,8 @@ services:
       - path: .env.test
         required: false
     environment:
-      # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
-      GITLAB_API_URL: http://gitlab:8929
+      # コンテナ内部通信用 URL（external は env_file 側を保持）
+      GITLAB_API_URL_INTERNAL: http://gitlab:8929
     depends_on:
       - postgresql
       - rabbitmq
@@ -151,8 +156,8 @@ services:
       - path: .env.test
         required: false
     environment:
-      # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
-      GITLAB_API_URL: http://gitlab:8929
+      # コンテナ内部通信用 URL（external は env_file 側を保持）
+      GITLAB_API_URL_INTERNAL: http://gitlab:8929
       # DinD コンテナ起動の遅延（T-30 後等の高負荷時）に対応するため Docker クライアントタイムアウトを延長
       DOCKER_CLIENT_TIMEOUT_SEC: "240"
     depends_on:
@@ -302,8 +307,8 @@ services:
         required: false
     environment:
       LLM_MODE: mock
-      # コンテナ内から到達可能なDockerサービス名でURLを上書き
-      GITLAB_API_URL: http://gitlab:8929
+      # コンテナ内部通信用 URL（external は env_file 側を保持）
+      GITLAB_API_URL_INTERNAL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
       BASE_URL: http://frontend:80
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
@@ -345,8 +350,8 @@ services:
         required: false
     environment:
       LLM_MODE: real
-      # コンテナ内から到達可能なDockerサービス名でURLを上書き
-      GITLAB_API_URL: http://gitlab:8929
+      # コンテナ内部通信用 URL（external は env_file 側を保持）
+      GITLAB_API_URL_INTERNAL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
       BASE_URL: http://frontend:80
       # デフォルトモデル（.env の DEFAULT_*_MODEL で変更可能）

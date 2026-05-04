@@ -30,9 +30,13 @@ def _build_gitlab_client() -> GitLabClient:
         RuntimeError: 必要な環境変数が未設定の場合
     """
     pat = os.environ.get("GITLAB_PAT", "")
-    api_url = os.environ.get("GITLAB_API_URL", "")
+    api_url_internal = os.environ.get("GITLAB_API_URL_INTERNAL", "").strip()
+    api_url_external = os.environ.get("GITLAB_API_URL", "").strip()
+    api_url = api_url_internal or api_url_external
     if not pat or not api_url:
-        raise RuntimeError("GITLAB_PAT または GITLAB_API_URL 環境変数が未設定です。")
+        raise RuntimeError(
+            "GITLAB_PAT または GITLAB_API_URL/GITLAB_API_URL_INTERNAL 環境変数が未設定です。"
+        )
     return GitLabClient(pat=pat, api_url=api_url)
 
 

@@ -102,7 +102,7 @@ async def main() -> None:
     from shared.gitlab_client.gitlab_client import GitLabClient
     gitlab_client = GitLabClient(
         pat=settings.gitlab_pat,
-        api_url=settings.gitlab_api_url,
+        api_url=settings.resolved_gitlab_api_url(),
     )
 
     # ------------------------------------------------------------------
