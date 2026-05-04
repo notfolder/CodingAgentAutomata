@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # GitLab Personal Access Token（api スコープ必須）
     gitlab_pat: str = ""
 
+    # GitLab 管理者用 Personal Access Token（System Hook 登録用）
+    gitlab_admin_pat: str = ""
+
     # GitLab インスタンスのベースURL
     gitlab_api_url: str = "https://gitlab.com"
 
