@@ -59,8 +59,16 @@ class TestSetupSystemHook(unittest.TestCase):
 
     def setUp(self) -> None:
         """テスト前の共通設定（WEBHOOK_URL・GITLAB_WEBHOOK_SECRET をモジュール変数に設定）"""
+        # テスト前の元の値を保存して tearDown() で復元できるようにする
+        self._orig_webhook_url = test_setup_module.WEBHOOK_URL
+        self._orig_webhook_secret = test_setup_module.GITLAB_WEBHOOK_SECRET
         test_setup_module.WEBHOOK_URL = _WEBHOOK_URL
         test_setup_module.GITLAB_WEBHOOK_SECRET = _WEBHOOK_SECRET
+
+    def tearDown(self) -> None:
+        """テスト後にモジュール変数を元の値へ復元する"""
+        test_setup_module.WEBHOOK_URL = self._orig_webhook_url
+        test_setup_module.GITLAB_WEBHOOK_SECRET = self._orig_webhook_secret
 
     def test_ut_sh_01_new_registration_when_no_hooks(self) -> None:
         """UT-SH-01: GitLab API が空のリストを返す場合に POST /api/v4/hooks が呼び出されること"""

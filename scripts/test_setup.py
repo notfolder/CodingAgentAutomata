@@ -396,6 +396,9 @@ def get_or_create_admin_pat() -> str:
         return admin_pat
 
     # 後方互換として GITLAB_ADMIN_TOKEN を参照する
+    # ※ GITLAB_ADMIN_TOKEN は旧バージョンで root PAT 用途として使用されていた環境変数。
+    #    GITLAB_ADMIN_PAT に移行済みの環境では不要となるが、既存環境での継続動作を
+    #    保証するために参照する。新規環境では GITLAB_ADMIN_PAT を使用すること。
     admin_token = os.environ.get("GITLAB_ADMIN_TOKEN", "")
     if admin_token:
         logger.info("環境変数 GITLAB_ADMIN_TOKEN を管理者用 PAT として使用します（後方互換）")
