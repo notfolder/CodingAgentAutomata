@@ -36,7 +36,7 @@
 - **変更内容**:
   - `setup_group_webhook(root_token, group_id)` を削除する
   - `setup_system_hook(admin_pat: str) -> None` を追加する
-  - `setup_system_hook()` は `GET /api/v4/hooks` で一覧取得後、`url`・`issues_events`・`merge_requests_events` を照合し、一致がなければ `POST /api/v4/hooks` で登録する
+  - `setup_system_hook()` は `GET /api/v4/hooks` で一覧取得後、`url`・`merge_requests_events` を照合し、一致がなければ `POST /api/v4/hooks` で登録する
   - メインフロー内で `setup_group_webhook()` を呼び出していた箇所を `setup_system_hook()` に置き換える
   - メインフロー内で `get_or_create_admin_pat()` を呼び出して admin_pat を取得してから `setup_system_hook()` に渡す
 - **完了条件**: テスト環境セットアップ実行時に System Hook が登録または再利用されること
@@ -48,7 +48,7 @@
 - **ファイル**: `scripts/register_system_hook.py`（新規）
 - **変更内容**:
   - `_gitlab_api(method, path, token, **kwargs)` ヘルパーを追加する
-  - `_register_system_hook(admin_pat, api_url, webhook_url, secret)` を追加する（`url`・`issues_events`・`merge_requests_events` の照合と冪等登録）
+  - `_register_system_hook(admin_pat, api_url, webhook_url, secret)` を追加する（`url`・`merge_requests_events` の照合と冪等登録）
   - `main()` を追加する（`GITLAB_ADMIN_PAT` 未設定時は標準エラー出力にメッセージを出力して終了コード 1 で終了する）
   - `if __name__ == "__main__":` でエントリーポイントを定義する
 - **完了条件**: `GITLAB_ADMIN_PAT=<PAT> python scripts/register_system_hook.py` で System Hook が冪等登録できること
@@ -68,7 +68,7 @@
 - **ファイル**: `README.md`
 - **変更内容**:
   - CUI 手動登録手順（`GITLAB_ADMIN_PAT` の設定方法と `register_system_hook.py` の実行手順）
-  - GUI 手順（GitLab 管理画面での URL・Secret Token・Issue 更新・MR 更新の設定手順）
+  - GUI 手順（GitLab 管理画面での URL・Secret Token・MR 更新イベントの設定手順）
   - 接続確認手順（Issue または MR を更新してログを確認する手順）
   - 失敗時確認観点（URL 誤り・Secret Token 不一致・対象イベント未選択・管理者権限不足の四点）
   - Group Webhook に関する既存記述を System Hook の記述に置き換える
@@ -92,7 +92,7 @@
   2. TS-SH-01: `GITLAB_ADMIN_PAT` を設定せずに `python scripts/test_setup.py` を実行し、PAT 自動生成と System Hook 登録をログで確認する
   3. TS-SH-02: `python scripts/register_system_hook.py` を 2 回実行し、2 回目が再利用になることを確認する
   4. TS-SH-03: GitLab 管理画面で手動設定を行い保存できることを確認する
-  5. TS-SH-04: Issue または MR を更新して producer のログで `X-Gitlab-Event: System Hook` の受信を確認する
+  5. TS-SH-04: MR を更新して producer のログで `X-Gitlab-Event: System Hook` の受信を確認する
   6. TS-SH-05: `GITLAB_ADMIN_PAT` なしで `register_system_hook.py` を実行し、終了コード 1 とエラーメッセージを確認する
   7. TS-SH-06: `README.md` の失敗時確認観点セクションに四点が記載されていることを確認する
 - **完了条件**: TS-SH-01〜TS-SH-06 が全て期待結果を満たすこと

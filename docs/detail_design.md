@@ -8,7 +8,7 @@
 |---|---|---|---|
 | バックエンド | Python 3.12 / FastAPI | 変更なし | 既存資産を維持し、機能追加のみで要件を満たせるため |
 | Consumer 実行形態 | 通常コンテナ | DinDベースコンテナへ変更（eBPF利用条件を満たす） | TTY待機検知を成立させる必須前提 |
-| Webhook運用 | Project Webhook前提が混在 | System Hook 標準へ統一 | GitLab CE 対応と設定漏れ低減 |
+| Webhook運用 | Project Webhook前提が混在 | MR 検出は System Hook 標準へ統一。Issue 検出はポーリングを継続 | GitLab CE 対応と設定漏れ低減 |
 | フロントエンド | Vue3 + Vuetify | 変更なし（設定画面に検証UIを追加） | GUI追加不要で既存画面拡張で対応可能 |
 
 ### 1.2 フロント/バックの接続
@@ -184,7 +184,7 @@ flowchart LR
 
 | 外部システム | 連携内容 | 変更点 |
 |---|---|---|
-| GitLab System Hook | Issue/MRイベント受信 | GitLab CE 対応・インスタンス全体設定に変更 |
+| GitLab System Hook | MR更新イベント受信（Issue検出はポーリング継続） | GitLab CE 対応・インスタンス全体設定に変更 |
 | GitLab REST API | コメント投稿、MR/Issue取得 | TTY検知失敗文言を追加 |
 | LiteLLM/Model APIs | キー検証、モデル候補取得 | 保存時検証導入 |
 | Linuxカーネル(eBPF) | Traceeでread(2)監視 | DinD前提で導入 |
@@ -247,8 +247,8 @@ flowchart TD
 
 #### 4.4.3 バッチ/定期処理
 
-- 既存ポーリング処理は継続
-- Webhook運用を主とし、ポーリングは補助（障害時補完）
+- 既存ポーリング処理は継続（Issue 検出に使用）
+- MR 検出は System Hook を主方式とする。Issue 検出はポーリングを継続する
 
 ### 4.5 トランザクション境界・ロールバック条件
 
@@ -551,8 +551,8 @@ sequenceDiagram
 
 | シナリオID | テスト目的 | 前提条件 | テスト手順 | 期待される結果 |
 |---|---|---|---|---|
-| TS-WB-1 | System Hook 受信確認 | System Hook 設定済み | プロジェクトで Issue 更新を発生させる | 受信 API がイベント受信し対象を特定する |
-| TS-WB-2 | 複数プロジェクト一元受信確認 | System Hook が登録済み | 複数プロジェクトで Issue/MR 更新を発生させる | 単一 System Hook で全イベントを受信する |
+| TS-WB-1 | System Hook 受信確認 | System Hook 設定済み | プロジェクトで MR 更新を発生させる | 受信 API がイベント受信し対象を特定する |
+| TS-WB-2 | 複数プロジェクト一元受信確認 | System Hook が登録済み | 複数プロジェクトで MR 更新を発生させる | 単一 System Hook で全イベントを受信する |
 | TS-WB-3 | 非同期処理分離確認 | 通常イベント送信可能 | 受信 API へイベント送信し応答時間を測定する | 受信 API は短時間で 2xx を返却する |
 | TS-WB-4 | 重複受信抑止確認 | 同一イベント再送を再現可能 | 同一 Idempotency-Key イベントを複数回送信する | 重複イベントが再処理されない |
 | TS-WB-5 | 受信失敗時記録確認 | 受信失敗再現可能 | 受信失敗ケースを発生させる | WARNING ログを記録し、再送は GitLab 側へ委譲する |
