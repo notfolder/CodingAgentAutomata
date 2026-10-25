@@ -6,6 +6,7 @@ python-gitlab ライブラリを利用して GitLab REST API にアクセスす�
 """
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -22,6 +23,32 @@ _MAX_RETRIES = 3          # 5xx / 接続エラーの最大リトライ回数
 _RATE_LIMIT_MAX_RETRIES = 5  # 429 レートリミット時の最大リトライ回数
 _BASE_BACKOFF_SEC = 1.0   # バックオフ基底秒数
 _MAX_BACKOFF_SEC = 60.0   # バックオフ最大待機秒数
+
+# MRタイトル先頭の Draft 表記（"Draft:" / "[Draft]" / "(Draft)"、大文字小文字を問わず連続も含む）
+_DRAFT_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:(?:draft\s*:|\[draft\]|\(draft\))\s*)+", re.IGNORECASE
+)
+
+
+def _build_mr_title(title: str, draft: bool) -> str:
+    """
+    MR タイトルを組み立てる。
+
+    CLI が生成したタイトルに既に Draft 表記が含まれていても二重にならないよう、
+    先頭の Draft 表記をすべて取り除いてから、draft 指定時のみ "Draft: " を付与する。
+    取り除いた結果が空になる場合（タイトルが Draft 表記のみ）は元のタイトルをそのまま使う。
+
+    Args:
+        title: CLI 等が生成した MR タイトル
+        draft: Draft MR として作成するか
+
+    Returns:
+        GitLab に送信する MR タイトル
+    """
+    stripped = _DRAFT_PREFIX_PATTERN.sub("", title).strip()
+    if not stripped:
+        return title.strip()
+    return f"Draft: {stripped}" if draft else stripped
 
 
 def _sleep_with_shutdown_check(wait_sec: float) -> bool:
@@ -441,7 +468,7 @@ class GitLabClient:
         """
         def _call():
             project = self._gl.projects.get(project_id)
-            mr_title = f"Draft: {title}" if draft else title
+            mr_title = _build_mr_title(title, draft)
             payload: dict = {
                 "title": mr_title,
                 "source_branch": source_branch,

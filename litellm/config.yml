@@ -69,3 +69,17 @@ model_list:
       model: openai/mock-claude
       api_key: sk-mock-dummy
       api_base: http://mock_llm:4000/v1
+
+  # Anthropic Claude Opus 5.5（プレフィックスあり）→ mock_llm に転送
+  - model_name: anthropic/claude-opus-5-5
+    litellm_params:
+      model: openai/mock-claude
+      api_key: sk-mock-dummy
+      api_base: http://mock_llm:4000/v1
+
+  # Anthropic Claude Opus 5.5（プレフィックスなし）→ mock_llm に転送
+  - model_name: claude-opus-5-5
+    litellm_params:
+      model: openai/mock-claude
+      api_key: sk-mock-dummy
+      api_base: http://mock_llm:4000/v1

@@ -51,7 +51,7 @@ def run_migrations() -> None:
     # DATABASE_URL 環境変数から接続URLを取得して設定を上書き
     db_url = os.environ.get(
         "DATABASE_URL",
-        "postgresql://user:password@postgresql:5432/db",
+        "postgresql+psycopg2://user:password@postgresql:5432/db",
     )
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
 

@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://user:password@postgresql:5432/db"
+    "DATABASE_URL", "postgresql+psycopg2://user:password@postgresql:5432/db"
 )
 
 engine = create_engine(DATABASE_URL)

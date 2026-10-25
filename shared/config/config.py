@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     # データベース設定
     # ------------------------------------------------------------------
     # PostgreSQL接続URL
-    database_url: str = "postgresql://user:password@postgresql:5432/db"
+    database_url: str = "postgresql+psycopg2://user:password@postgresql:5432/db"
 
     # ------------------------------------------------------------------
     # RabbitMQ 設定

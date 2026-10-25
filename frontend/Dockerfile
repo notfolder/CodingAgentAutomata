@@ -6,8 +6,9 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # 依存関係のインストール（キャッシュ最適化）
-COPY frontend/package.json ./
-RUN npm install
+# package-lock.json に固定された版をそのまま入れる（依存解決を省けるため npm install より速く、版も再現できる）
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
 
 # ソースコードのコピーとビルド
 COPY frontend/ .

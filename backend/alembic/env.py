@@ -36,7 +36,7 @@ target_metadata = Base.metadata
 # DATABASE_URL 環境変数から接続URLを取得して alembic.ini の値を上書きする
 _db_url = os.environ.get(
     "DATABASE_URL",
-    "postgresql://user:password@postgresql:5432/db",
+    "postgresql+psycopg2://user:password@postgresql:5432/db",
 )
 config.set_main_option("sqlalchemy.url", _db_url)
 

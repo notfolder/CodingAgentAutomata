@@ -273,6 +273,37 @@ class MRProcessor:
 
         return False, ""
 
+    def _build_completion_note(
+        self,
+        initial_head_sha: str,
+        final_head_sha: str,
+        worktree_dirty: bool,
+    ) -> str:
+        """
+        正常完了時に MR へ投稿する完了コメントを組み立てる。
+
+        コミットなしの完了（レビューのみ・変更不要等）も正当な完了として扱うが、
+        成果物が無いことに気づけるよう、新しいコミットが無い場合はその旨を併記する。
+
+        Args:
+            initial_head_sha: CLI 実行開始時の HEAD
+            final_head_sha: CLI 実行終了時の HEAD
+            worktree_dirty: CLI 実行終了時に作業ツリーへ未コミット変更が残っているか
+
+        Returns:
+            完了コメント本文
+        """
+        note = "✅ CLI 処理が完了しました。"
+        if initial_head_sha and initial_head_sha == final_head_sha:
+            if worktree_dirty:
+                note += (
+                    "\n\n⚠️ 新しいコミットはありません"
+                    "（コミットされていない変更が残っており、ブランチには反映されていません）。"
+                )
+            else:
+                note += "\n\n⚠️ 新しいコミットはありません（ファイルの変更もありませんでした）。"
+        return note
+
     def _extract_log_marker(self, cli_log_lines: list[str], marker: str) -> Optional[str]:
         """CLI ログから `__MARKER__:value` 形式の最終値を抽出する。"""
         prefix = f"{marker}:"
@@ -893,7 +924,9 @@ class MRProcessor:
 
             logger.info("MRProcessor: [後処理] create_merge_request_note(✅) 開始 task_uuid=%s", task_uuid)
             self._gitlab_client.create_merge_request_note(
-                project_id, mr_iid, "✅ CLI 処理が完了しました。"
+                project_id,
+                mr_iid,
+                self._build_completion_note(initial_head_sha, final_head_sha, worktree_dirty),
             )
             logger.info("MRProcessor: [後処理] create_merge_request_note(✅) 完了 task_uuid=%s", task_uuid)
 
