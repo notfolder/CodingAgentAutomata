@@ -96,7 +96,8 @@ if [ ! -f "${ENV_FILE}" ]; then
 fi
 
 # -------------------------------------------------------
-# .env を読み込む（既に設定済みの環境変数は上書きしない）
+# .env を読み込む（.env の値で既存の環境変数を上書きする。
+# 実行時に環境変数で値を指定しても .env の値が優先される点に注意）
 # -------------------------------------------------------
 echo ".env を読み込みます: ${ENV_FILE}"
 load_env_file "${ENV_FILE}"
@@ -119,10 +120,20 @@ echo ""
 if [ "${REAL_LLM}" = "true" ]; then
     COMPOSE_PROFILE="test-real"
     PLAYWRIGHT_SERVICE="test_playwright_real"
+    # もう片方のモードの LiteLLM サービスとその profile
+    OTHER_PROFILE="test"
+    OTHER_LITELLM_SERVICE="litellm"
 else
     COMPOSE_PROFILE="test"
     PLAYWRIGHT_SERVICE="test_playwright"
+    OTHER_PROFILE="test-real"
+    OTHER_LITELLM_SERVICE="litellm_real"
 fi
+
+# litellm と litellm_real は同じホストポート 4001 を使うため、
+# モードを切り替えて再実行した場合に備えてもう片方を停止しておく
+echo "[ステップ 1] もう片方のモードの LiteLLM（${OTHER_LITELLM_SERVICE}）が起動していれば停止します..."
+docker compose --profile "${OTHER_PROFILE}" stop "${OTHER_LITELLM_SERVICE}" >/dev/null 2>&1 || true
 
 echo "[ステップ 1] サービスを起動します（profile: ${COMPOSE_PROFILE}）..."
 docker compose --profile "${COMPOSE_PROFILE}" up -d --build
@@ -331,10 +342,32 @@ fi
 echo ""
 echo "[ステップ 5] test_setup.py を実行します（GitLab・テストユーザー設定）..."
 
+# test_setup.py は Python 3.10 以上の構文を使うため、3.10 以上の Python を選ぶ
+# （macOS 標準の /usr/bin/python3 は 3.9 のため、PATH 上の新しい版を優先して探す）
+is_python_310_or_later() {
+    "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1
+}
+SETUP_PYTHON=""
+for candidate in python3.13 python3.12 python3.11 python3.10 python3 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
+    if command -v "${candidate}" >/dev/null 2>&1 && is_python_310_or_later "${candidate}"; then
+        SETUP_PYTHON="${candidate}"
+        break
+    fi
+done
+if [ -z "${SETUP_PYTHON}" ]; then
+    echo "エラー: Python 3.10 以上が見つかりません。Python 3.10 以上をインストールしてください" >&2
+    exit 1
+fi
+echo "  test_setup.py の実行に使う Python: $(command -v "${SETUP_PYTHON}") ($("${SETUP_PYTHON}" --version 2>&1))"
+
 # 依存ライブラリをインストールする（venv を使用して外部管理環境の制限を回避）
 VENV_DIR="${PROJECT_ROOT}/.venv-test-setup"
 if [ ! -d "${VENV_DIR}" ]; then
-    python3 -m venv "${VENV_DIR}"
+    "${SETUP_PYTHON}" -m venv "${VENV_DIR}"
+elif ! is_python_310_or_later "${VENV_DIR}/bin/python3"; then
+    # 以前に古い Python で作成された venv は作り直す
+    echo "  既存の venv が Python 3.10 未満のため作り直します: ${VENV_DIR}"
+    "${SETUP_PYTHON}" -m venv --clear "${VENV_DIR}"
 fi
 "${VENV_DIR}/bin/pip" install requests -q
 

@@ -35,6 +35,7 @@ flowchart LR
 
 - Docker 26 以上
 - Docker Compose v2 以上
+- Python 3.10 以上（テスト環境セットアップ `scripts/test_setup.sh` がホスト上で `scripts/test_setup.py` を実行するため。macOS 標準の Python 3.9 は不可）
 
 ---
 

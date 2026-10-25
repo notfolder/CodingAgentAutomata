@@ -15,7 +15,7 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 # 環境変数から接続URLを取得（未設定の場合はフォールバック値を使用）
 _DATABASE_URL: str = os.environ.get(
     "DATABASE_URL",
-    "postgresql://user:password@postgresql:5432/db",
+    "postgresql+psycopg2://user:password@postgresql:5432/db",
 )
 
 # SQLAlchemy エンジンを生成
