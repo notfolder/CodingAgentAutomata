@@ -167,6 +167,21 @@ def test_cli_zscaler_instruction_and_inner_proxy() -> None:
     log = mock_log(since)
     assert "pypi.org" in log
 
+    # 指示文が CLI エージェントに伝える場所に、足した証明書と、それを含む OS の束がある
+    extra_ca = (ZSCALER_DIR / "extra-ca.pem").read_text()
+    cert_hash = hashlib.sha256(extra_ca.encode()).hexdigest()
+    body_line = next(line for line in extra_ca.splitlines() if line and not line.startswith("-----"))
+    for image in CLI_IMAGES.values():
+        check = (
+            "sha256sum /usr/local/share/ca-certificates/zscaler.crt | cut -d' ' -f1;"
+            f" grep -cF '{body_line}' /etc/ssl/certs/ca-certificates.crt"
+        )
+        out = run_cli_image(image, check)
+        assert out.returncode == 0, out.stdout + out.stderr
+        lines = out.stdout.split()
+        assert lines[0] == cert_hash, (image, lines)
+        assert int(lines[1]) >= 1, (image, lines)
+
 
 @requires_mock
 @pytest.mark.parametrize("name", list(CLI_IMAGES))

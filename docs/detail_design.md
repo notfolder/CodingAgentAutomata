@@ -231,7 +231,7 @@ flowchart TD
 ```mermaid
 graph TB
   subgraph host[社内の Linux サーバー]
-    HB[ホストのビルド ホストネットワーク]
+    HB[ホストのビルドと使用前の接続確認]
     subgraph net[本システムの compose ネットワーク]
       BK[backend]
       PR[producer]
@@ -263,7 +263,7 @@ graph TB
   CS --> MQ
 ```
 
-本番では、ビルドも実行中の部品も同じ Zscaler のプロキシの宛先を使う。模擬プロキシを使うテストでは、ビルド（ホストネットワーク）は `http://127.0.0.1:18080`、実行中の部品と CLI コンテナは `http://host.docker.internal:18080` を使う。`host.docker.internal` は compose の追加のホスト名（ホストのゲートウェイ）で解決する。
+本番では、ビルドも実行中の部品も同じ Zscaler のプロキシの宛先を使う。模擬プロキシを使うテストでは、ビルドと実行中の部品と CLI コンテナは `http://host.docker.internal:18080` を使い、ホストで行う使用前の接続確認とホストの pip は `http://127.0.0.1:18080` を使う。`host.docker.internal` は、ビルドでも実行中でも、compose の追加のホスト名（ホストのゲートウェイ）で解決する。
 
 ---
 
@@ -285,7 +285,7 @@ DB は PostgreSQL 16 を使う（ユーザー・アダプタ・タスク・設�
 | `DS-SC-TASKS-TABLE-DT-TASK-ENTITY` | tasks テーブル | 3-1 の表。部分ユニークインデックス `tasks_no_duplicate_active` を含む | `RQ-DT-TASK-ENTITY`、`RQ-DT-POSTGRESQL-STORE`、`RQ-FT-PREVENT-DUPLICATE-TASK`、`RQ-DT-TASK-CREATE-PENDING`、`RQ-DT-TASK-PENDING-TO-RUNNING`、`RQ-DT-TASK-RUNNING-TO-COMPLETED`、`RQ-DT-TASK-RUNNING-TO-FAILED` |
 | `DS-SC-USERS-TABLE-DT-USER-ENTITY` | users テーブル | 3-1 の表 | `RQ-DT-USER-ENTITY`、`RQ-DT-POSTGRESQL-STORE`、`RQ-DT-USER-ACTIVATION` |
 | `DS-SC-ZSCALER-CERT-FILE-DT-ZSCALER-CERT-FILE` | Zscaler の証明書ファイル | プロジェクト直下の `certs/zscaler-ca.pem`。PEM 形式で、証明書を 1 つ以上含む。`certs/` は git の管理外 | `RQ-DT-ZSCALER-CERT-FILE` |
-| `DS-SC-ZSCALER-GENERATED-DIR-FT-RESOLVE-CERT-BUNDLE` | 生成物のディレクトリ `.zscaler/`（git の管理外） | `state`（`enabled` か `disabled` の 1 行）、`extra-ca.pem`（イメージに足す証明書。有効なときだけ）、`ca-bundle.pem`（証明書の束。常に作る）、`install-ca.sh`（イメージ内の導入処理の写し）、`zscaler.env`（実行中の部品の環境変数: `ZSCALER_ENABLED`、`HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` と、それぞれの小文字版。無効なときプロキシと除外宛先は空）、`build.env`（ビルド用: `ZSCALER_BUILD_PROXY`、`ZSCALER_BUILD_NO_PROXY`） | `RQ-FT-RESOLVE-CERT-BUNDLE`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD`、`RQ-FT-APPLY-ZSCALER-SETTINGS-RUNTIME` |
+| `DS-SC-ZSCALER-GENERATED-DIR-FT-RESOLVE-CERT-BUNDLE` | 生成物のディレクトリ `.zscaler/`（git の管理外） | `state`（`enabled` か `disabled` の 1 行）、`extra-ca.pem`（イメージに足す証明書。有効なときだけ）、`ca-bundle.pem`（証明書の束。常に作る）、`install-ca.sh`（イメージ内の導入処理の写し）、`zscaler.env`（実行中の部品の環境変数: `ZSCALER_ENABLED`、`HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` と、それぞれの小文字版。無効なときプロキシと除外宛先は空）、`build.env`（ビルド用の `ZSCALER_BUILD_PROXY`・`ZSCALER_BUILD_NO_PROXY` と、ホストで使う宛先 `ZSCALER_HOST_PROXY`。本物の Zscaler では、どちらの宛先も `ZSCALER_PROXY_URL` と同じ） | `RQ-FT-RESOLVE-CERT-BUNDLE`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD`、`RQ-FT-APPLY-ZSCALER-SETTINGS-RUNTIME` |
 | `DS-SC-ZSCALER-SETTINGS-ENV-DT-ZSCALER-SETTINGS-ENV` | `.env` の Zscaler 設定 | `ZSCALER_ENABLED`（`true` か `false`。書いていない場合は `true`）、`ZSCALER_PROXY_URL`（`http://ホスト名:ポート`。有効なときは必須）、`ZSCALER_NO_PROXY_EXTRA`（カンマ区切り。空でよい）。値は、プロセスの環境変数にあればそれを、無ければ `.env` のものを使う | `RQ-DT-ZSCALER-SETTINGS-ENV`、`RQ-UI-ZSCALER-ENV-SETTINGS` |
 
 **users**
@@ -582,7 +582,7 @@ flowchart TD
     L --> M[終了コード 0]
 ```
 
-模擬プロキシのとき（`--mock`）は、`.env` の `ZSCALER_ENABLED` と `ZSCALER_PROXY_URL` を使わず、有効として扱う。足す証明書は模擬プロキシの認証局の証明書（`zscaler-mock/.data/mitmproxy-ca-cert.pem`）、証明書の束はそれとホストの OS の束、ビルド用の宛先は `http://127.0.0.1:18080`、実行中の部品の宛先は `http://host.docker.internal:18080` にする。`ZSCALER_NO_PROXY_EXTRA` は `.env` のものを使う。
+模擬プロキシのとき（`--mock`）は、`.env` の `ZSCALER_ENABLED` と `ZSCALER_PROXY_URL` を使わず、有効として扱う。足す証明書は模擬プロキシの認証局の証明書（`zscaler-mock/.data/mitmproxy-ca-cert.pem`）、証明書の束はそれとホストの OS の束、ビルド用と実行中の部品の宛先は `http://host.docker.internal:18080`、ホストで使う宛先は `http://127.0.0.1:18080` にする。`ZSCALER_NO_PROXY_EXTRA` は `.env` のものを使う。
 
 ホストの OS の束は、`/etc/ssl/certs/ca-certificates.crt`、`/etc/pki/tls/certs/ca-bundle.crt`、`/etc/ssl/cert.pem` の順に探し、最初に見つかったものを使う。
 
@@ -599,7 +599,7 @@ flowchart TD
 
 各 Dockerfile は、Zscaler 設定の有効・無効によらず、次の環境変数を OS の証明書の束（`/etc/ssl/certs/ca-certificates.crt`）に向ける: `SSL_CERT_FILE`、`REQUESTS_CA_BUNDLE`、`PIP_CERT`、`NODE_EXTRA_CA_CERTS`。束は公開の認証局と（有効なときは）Zscaler の証明書を含むので、無効なときも動作は変わらない。
 
-プロキシの宛先は、docker compose のビルド引数（`HTTP_PROXY`・`HTTPS_PROXY`・`NO_PROXY` と小文字版）で渡す。値は compose の入口スクリプトなどが `build.env` から環境に入れる。すべてのビルドはホストネットワークで行う（模擬プロキシのビルド用の宛先 `127.0.0.1` に届かせるため）。
+プロキシの宛先は、docker compose のビルド引数（`HTTP_PROXY`・`HTTPS_PROXY`・`NO_PROXY` と小文字版）で渡す。値は compose の入口スクリプトなどが `build.env` から環境に入れる。すべてのビルドに追加のホスト名 `host.docker.internal:host-gateway` を付ける（模擬プロキシのビルド用の宛先に届かせるため）。ビルドにホストネットワークは使わない（docker compose の今の版は、ビルドのホストネットワークに追加の許可を求め、`docker compose build` からは渡せないため）。
 
 
 #### 4-2-7. CLI コンテナの起動と Zscaler 設定の受け渡し
@@ -733,12 +733,12 @@ SOLID 原則への適合状況:
 | `DS-FN-RESOLVE-CERT-BUNDLE-FT-RESOLVE-CERT-BUNDLE` | `zscaler_resolve_bundle` | 4-2-1 の証明書の決め方（証明書ファイル、ホストの OS の束、模擬プロキシの認証局） | — | `RQ-FT-RESOLVE-CERT-BUNDLE` |
 | `DS-FN-BUILD-NO-PROXY-LIST-FT-BUILD-NO-PROXY-LIST` | `zscaler_build_no_proxy` | `localhost`、`127.0.0.1`、`::1` と、本システムの compose のサービス名・ネットワークの別名のすべて（postgresql、postgresql_litellm、rabbitmq、backend、frontend、producer、consumer、mock_llm、gitlab、litellm、litellm_real、test_playwright、test_playwright_real、cli_exec_base、cli_exec_claude、cli_exec_opencode、unit_test）に、`ZSCALER_NO_PROXY_EXTRA` を足し、重複を除いてカンマでつなぐ | — | `RQ-FT-BUILD-NO-PROXY-LIST` |
 | `DS-FN-REQUIRE-ZSCALER-SETTINGS-FT-REQUIRE-ZSCALER-SETTINGS` | `zscaler_require_settings` | 4-1-2 の①〜③の判定 | — | `RQ-FT-REQUIRE-ZSCALER-SETTINGS` |
-| `DS-FN-VERIFY-TRUST-BEFORE-USE-FT-VERIFY-ZSCALER-TRUST-BEFORE-USE` | `zscaler_preflight` | ホストの curl で、ビルド用の宛先を経由して `https://pypi.org/simple/` へ、証明書の束を信頼先にして 20 秒以内につなぐ。curl の失敗の種類で「接続できない」と「検証できない」を分ける | — | `RQ-FT-VERIFY-ZSCALER-TRUST-BEFORE-USE` |
+| `DS-FN-VERIFY-TRUST-BEFORE-USE-FT-VERIFY-ZSCALER-TRUST-BEFORE-USE` | `zscaler_preflight` | ホストの curl で、ホストで使う宛先を経由して `https://pypi.org/simple/` へ、証明書の束を信頼先にして 20 秒以内につなぐ。curl の失敗の種類で「接続できない」と「検証できない」を分ける | — | `RQ-FT-VERIFY-ZSCALER-TRUST-BEFORE-USE` |
 | `DS-FN-PREPARE-ZSCALER-FT-APPLY-ZSCALER-SETTINGS-RUNTIME` | `zscaler_prepare`・`zscaler_export_build_env` | 4-2-1 の全体の流れと生成物の書き込み。`build.env` の値を呼び出し元の環境に入れる。呼び出し元のスクリプトで準備済み（環境変数 `ZSCALER_PREPARED=1` を子のプロセスへ引き継ぐ）なら繰り返さない | — | `RQ-FT-APPLY-ZSCALER-SETTINGS-RUNTIME`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
 | `DS-FN-INSTALL-CA-SYSTEM-FT-APPLY-ZSCALER-SETTINGS-BUILD` | `install-ca.sh` の既定の動作 | 4-2-2 の 1〜3 | — | `RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
 | `DS-FN-INSTALL-CA-NSS-FT-APPLY-ZSCALER-SETTINGS-CLI-BROWSER` | `install-ca.sh nss <利用者>` | 4-2-2 の 4 | — | `RQ-FT-APPLY-ZSCALER-SETTINGS-CLI-BROWSER` |
 | `DS-FN-START-ZSCALER-MOCK-FT-RUN-ZSCALER-MOCK-PROXY` | `start_zscaler_mock` | 模擬プロキシの compose プロジェクトを起動し、認証局の証明書のファイルができるまで最大 60 秒待つ | — | `RQ-FT-RUN-ZSCALER-MOCK-PROXY` |
-| `DS-FN-INSTALL-HOST-PYTHON-DEPS-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` | `install_host_python_deps` | ホストの仮想環境の pip に、有効なら証明書の束（`--cert`）とビルド用の宛先（`--proxy`）を渡して必要なライブラリ（requests、pytest）を入れる | — | `RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` |
+| `DS-FN-INSTALL-HOST-PYTHON-DEPS-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` | `install_host_python_deps` | ホストの仮想環境の pip に、有効なら証明書の束（`--cert`）とホストで使う宛先（`--proxy`）を渡して必要なライブラリ（requests、pytest）を入れる | — | `RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` |
 | `DS-FN-START-DIND-AND-RUN-CLI-FT-RUN-STANDARD-BROWSERS-CLI-CONTAINER` | `dind-start.sh` の本体 | iptables の方式を選んで中の Docker デーモンを起動し（moby の起動用スクリプト経由）、`CLI_RUN_AS` が指定されていればその利用者に切り替えて（`setpriv`）コマンドを実行する。引数が無ければデーモンのログを表示し続ける | — | `RQ-FT-RUN-STANDARD-BROWSERS-CLI-CONTAINER` |
 | `DS-FN-CONFIGURE-INNER-DOCKER-PROXY-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` | `configure_inner_docker_proxy` | `ZSCALER_ENABLED=true` なら、プロキシのホスト名を IP アドレスに解決し、root と claude の `~/.docker/config.json` の `proxies` にプロキシの宛先と除外宛先を書く | — | `RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` |
 
@@ -1088,8 +1088,8 @@ Zscaler 環境対応の共通化:
 | `DS-TS-BUILD-VIA-ZSCALER-MOCK-TS-VERIFY-BUILD-VIA-ZSCALER-MOCK` | 全イメージを模擬プロキシ経由でビルドできる | 前提: 社外の開発環境。`certs/` に証明書ファイルが無い。手順: `./scripts/test_setup.sh --zscaler-mock` を実行し、模擬プロキシのログを見る。期待結果: 終了コード 0。backend・producer・consumer・frontend・CLI コンテナの土台と 2 種のビルドの通信が模擬プロキシのログに残る | `RQ-TS-VERIFY-BUILD-VIA-ZSCALER-MOCK` |
 | `DS-TS-CLI-BROWSER-TRUST-TS-VERIFY-CLI-BROWSER-TRUST` | CLI コンテナのブラウザが Zscaler の証明書を信頼する | 前提: `--zscaler-mock` でセットアップ済み。手順: CLI コンテナ 2 種で、CLI を実行する利用者として `npx playwright install chromium webkit` を行い、証明書のエラーを無視する設定を使わずに `https://example.com/` を開く。期待結果: 両方のブラウザでページの題名が取れ、通信が模擬プロキシのログに残る | `RQ-TS-VERIFY-CLI-BROWSER-TRUST` |
 | `DS-TS-CLI-STANDARD-BROWSERS-TS-VERIFY-CLI-STANDARD-BROWSERS` | 標準のブラウザが起動し、既存の CLI コンテナの機能が変わらない | 前提: `.env` に `ZSCALER_ENABLED=false`。手順: CLI コンテナ 2 種で、CLI を実行する利用者として Chromium と WebKit を取得して `https://example.com/` を開き、`./scripts/test_setup.sh --run-tests` で既存の E2E（TTY 入力待機検知を含む）を実行する。期待結果: 両方のブラウザでページが開け、既存の E2E がすべて成功する | `RQ-TS-VERIFY-CLI-STANDARD-BROWSERS` |
-| `DS-TS-CLI-ZSCALER-INSTRUCTION-TS-VERIFY-CLI-ZSCALER-INSTRUCTION` | 指示文と中のコンテナへの宛先の受け渡し | 前提: `--zscaler-mock` でセットアップ済み。ユーザー個別の F-4 テンプレートがある利用者と無い利用者。手順: 両方の利用者で F-3 と F-4 を実行してタスクのログのプロンプトを確かめ、CLI コンテナの中で `docker run` したコンテナの環境変数と、そのコンテナから `https://pypi.org/simple/` への接続を確かめる。期待結果: すべてのプロンプトの末尾に指示文があり、中のコンテナにプロキシの宛先（IP アドレス）と除外宛先が渡り、そのコンテナからの接続要求が模擬プロキシのログに残る（中のコンテナには本システムが証明書を入れないので、証明書の検証の成否は確かめない） | `RQ-TS-VERIFY-CLI-ZSCALER-INSTRUCTION` |
-| `DS-TS-DISABLED-SWITCH-TS-VERIFY-DISABLED-SWITCH` | 無効なら証明書と宛先なしで動く | 前提: `.env` に `ZSCALER_ENABLED=false`。手順: `./scripts/test_setup.sh --run-tests` を実行し、CLI コンテナに渡ったプロンプトを確かめる。期待結果: 終了コード 0、既存の E2E がすべて成功し、プロンプトに指示文が無い | `RQ-TS-VERIFY-DISABLED-SWITCH` |
+| `DS-TS-CLI-ZSCALER-INSTRUCTION-TS-VERIFY-CLI-ZSCALER-INSTRUCTION` | 指示文と中のコンテナへの宛先の受け渡し | 前提: `--zscaler-mock` でセットアップ済み。手順: consumer のコンテナの中で、DB のシステム設定のテンプレートとユーザー個別のテンプレートの両方から F-3 と F-4 のプロンプトを作って末尾を確かめる（タスクを流してプロンプトを取り出す仕組みが無いため）。CLI コンテナ 2 種で、`/usr/local/share/ca-certificates/zscaler.crt` と OS の証明書の束（`/etc/ssl/certs/ca-certificates.crt`）を確かめる。CLI コンテナの中で `docker run` したコンテナの環境変数と、そのコンテナから `https://pypi.org/simple/` への接続を確かめる。期待結果: すべてのプロンプトの末尾に指示文があり、`zscaler.crt` が生成物の足す証明書と同じで、OS の束がその証明書を含み、中のコンテナにプロキシの宛先（IP アドレス）と除外宛先が渡り、そのコンテナからの接続要求が模擬プロキシのログに残る（中のコンテナには本システムが証明書を入れないので、証明書の検証の成否は確かめない） | `RQ-TS-VERIFY-CLI-ZSCALER-INSTRUCTION` |
+| `DS-TS-DISABLED-SWITCH-TS-VERIFY-DISABLED-SWITCH` | 無効なら証明書と宛先なしで動く | 前提: `.env` に `ZSCALER_ENABLED=false`。手順: `./scripts/test_setup.sh --run-tests` を実行し、consumer のコンテナの中で、CLI コンテナへ渡す環境変数と指示文を確かめる（タスクを流してプロンプトを取り出す仕組みが無いため）。期待結果: 終了コード 0、既存の E2E がすべて成功し、CLI へ渡す環境変数は `ZSCALER_ENABLED=false` だけで、指示文は空 | `RQ-TS-VERIFY-DISABLED-SWITCH` |
 | `DS-TS-DOCKER-COMPOSE-IN-CLI-E2E-TS-VERIFY-DOCKER-COMPOSE-IN-CLI` | `e2e/tests/gitlab_integration.spec.ts（T-33・T-34）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-DOCKER-COMPOSE-IN-CLI` |
 | `DS-TS-ISSUE-TO-MR-E2E-TS-VERIFY-ISSUE-TO-MR` | `e2e/tests/gitlab_integration.spec.ts（T-04〜T-06）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-ISSUE-TO-MR`、`RQ-NF-ISSUE-TO-MR-5MIN` |
 | `DS-TS-LLM-SETTINGS-E2E-TS-VERIFY-LLM-SETTINGS` | `e2e/tests/llm_settings.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-LLM-SETTINGS` |
@@ -1106,7 +1106,7 @@ Zscaler 環境対応の共通化:
 | `DS-TS-PROMPT-TEMPLATES-E2E-TS-VERIFY-PROMPT-TEMPLATES` | `e2e/tests/prompt_templates.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-PROMPT-TEMPLATES` |
 | `DS-TS-REAL-LLM-E2E-VIA-MOCK-TS-VERIFY-REAL-LLM-E2E-VIA-MOCK` | 実際の LLM の F-3・F-4 が模擬経由で完了する | 前提: 実 LLM の API キーを `.env` に設定済み。手順: `./scripts/test_setup.sh --zscaler-mock --real --run-tests` を実行する。期待結果: 実 LLM モードの E2E がすべて成功し、LLM の API への通信が模擬プロキシのログに残る | `RQ-TS-VERIFY-REAL-LLM-E2E-VIA-MOCK` |
 | `DS-TS-REAL-SETTINGS-UNCHANGED-TS-VERIFY-REAL-SETTINGS-UNCHANGED` | 模擬のセットアップが本物の設定を書き換えない | 前提: `certs/zscaler-ca.pem` と `.env` に本物の値（テスト用のダミーの証明書）。手順: 実行前後で両ファイルのハッシュを比べる。期待結果: 同じ | `RQ-TS-VERIFY-REAL-SETTINGS-UNCHANGED` |
-| `DS-TS-RUNTIME-HTTPS-VIA-ZSCALER-MOCK-TS-VERIFY-RUNTIME-HTTPS-VIA-ZSCALER-MOCK` | 実行中の各部品から模擬経由で検証付きの HTTPS 接続ができる | 前提: 上のセットアップ済み。手順: backend・producer・consumer で requests と httpx による `https://pypi.org/simple/` への接続、CLI コンテナ 2 種で Node.js の fetch・curl・git・uv・pip による接続と、`https://api.anthropic.com/` への接続を、`docker compose exec` と `docker run` で行う。期待結果: すべて成功し、模擬プロキシのログに記録される | `RQ-TS-VERIFY-RUNTIME-HTTPS-VIA-ZSCALER-MOCK` |
+| `DS-TS-RUNTIME-HTTPS-VIA-ZSCALER-MOCK-TS-VERIFY-RUNTIME-HTTPS-VIA-ZSCALER-MOCK` | 実行中の各部品から模擬経由で検証付きの HTTPS 接続ができる | 前提: 上のセットアップ済み。手順: backend・producer・consumer で requests と httpx による `https://pypi.org/simple/` への接続、CLI コンテナ 2 種で Node.js の fetch（`NODE_USE_ENV_PROXY=1` を付ける。Node.js の fetch は既定ではプロキシの環境変数を読まないため）・curl・git・uv・pip による接続と、`https://api.anthropic.com/` への接続を、`docker compose exec` と `docker run` で行う。期待結果: すべて成功し、模擬プロキシのログに記録される | `RQ-TS-VERIFY-RUNTIME-HTTPS-VIA-ZSCALER-MOCK` |
 | `DS-TS-TASK-HISTORY-E2E-TS-VERIFY-TASK-HISTORY` | `e2e/tests/tasks.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-TASK-HISTORY` |
 | `DS-TS-TTY-DETECTION-E2E-TS-VERIFY-TTY-DETECTION` | `e2e/tests/tty_detection.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-TTY-DETECTION` |
 | `DS-TS-UNTRUSTED-CERT-STOPS-TS-VERIFY-UNTRUSTED-CERT-STOPS` | 信頼していない証明書で使用前の接続確認が止める | 前提: 模擬プロキシが起動している。手順: 一時ディレクトリを `--project-dir` にし、`ZSCALER_PROXY_URL=http://127.0.0.1:18080`、証明書ファイルなし、`--host-bundle` に模擬の認証局を含まない束を渡して準備処理を実行する。期待結果: 終了コード 1、「証明書を検証できない」が標準エラーに出て、生成物が作られない | `RQ-TS-VERIFY-UNTRUSTED-CERT-STOPS` |
@@ -1154,7 +1154,7 @@ docker compose --profile test run --rm unit_test
 
 
 - 既存の Web の GUI の E2E は、既存の Playwright（`test_playwright`・`test_playwright_real`）をそのまま使う。
-- Zscaler の E2E（8-2 の各シナリオのうち、既存の Playwright の E2E 以外）は、ホストの仮想環境の pytest で `e2e/zscaler/` に書く。docker の CLI でコンテナに入って確かめる（ホストのコマンドとコンテナの操作が要るため、コンテナの中では実行しない）。
+- Zscaler の E2E（8-2 の各シナリオのうち、既存の Playwright の E2E 以外）は、ホストの仮想環境の pytest で `e2e/zscaler/` に書く。docker の CLI でコンテナに入って確かめる（ホストのコマンドとコンテナの操作が要るため、コンテナの中では実行しない）。各シナリオは、生成物の状態と模擬プロキシの起動の有無で、実行するかを決める。
 - `test_playwright`・`test_playwright_real` は、Zscaler 設定の環境変数ファイルと証明書の束のマウントを受ける（9-1）。
 
 ### 8-4. E2E の実行コマンドと運用
@@ -1165,7 +1165,7 @@ docker compose --profile test run --rm unit_test
 | 模擬プロキシを使う E2E（モック LLM） | `./scripts/test_setup.sh --zscaler-mock --run-tests` |
 | 模擬プロキシを使う E2E（実 LLM。手動で実行する） | `./scripts/test_setup.sh --zscaler-mock --real --run-tests` |
 
-`--run-tests` は、既存の Playwright の E2E の後に、`--zscaler-mock` のときは `e2e/zscaler/` の pytest も実行する。実装時の必須ゴールは、上の 1 行目と 2 行目の全件通過とする。3 行目は API キーと費用が要るので、手動の実行を必須にする。テストが失敗したら、修正と再実行を全件成功まで繰り返す。
+`--run-tests` は、既存の Playwright の E2E の後に、模擬プロキシの有無によらず `e2e/zscaler/` の pytest も実行する。各シナリオは、生成物の状態（`.zscaler/state`）、模擬プロキシの起動の有無、実 LLM のモードかで、実行するかを決める（無効のスイッチと標準のブラウザのシナリオは、Zscaler 設定が無効のときにしか確かめられないため）。実装時の必須ゴールは、上の 1 行目と 2 行目の全件通過とする。3 行目は API キーと費用が要るので、手動の実行を必須にする。テストが失敗したら、修正と再実行を全件成功まで繰り返す。
 
 ---
 
@@ -1182,7 +1182,7 @@ docker compose --profile test run --rm unit_test
 | `DS-OP-CLI-EXTRA-SETUP-MIGRATION-NF-CLI-EXTRA-SETUP-MIGRATION` | Zscaler 環境対応 | README と要件の例の追加環境の構築コマンドを、apt の書き方（例: `apt-get update && apt-get install -y --no-install-recommends golang ruby`）にする。旧い apk の書き方は失敗することを書く | `RQ-NF-CLI-EXTRA-SETUP-MIGRATION` |
 | `DS-OP-COMPONENT-DOCKERFILES-OP-HEALTH-MONITORING` | 部品のイメージ | backend・producer・consumer・mock-llm は `python:3.12-slim` に shared と各部品を入れる。起動コマンドは backend が uvicorn の 8000 番、producer と consumer が `python -m`、mock-llm が `python server.py` | `RQ-OP-HEALTH-MONITORING`、`RQ-FT-MIGRATE-DB-ON-STARTUP` |
 | `DS-OP-COMPOSE-SERVICES-FT-RUN-CLI-CONTAINER` | compose の構成 | `docker-compose.yml`。サービス、プロファイル（なし・test・test-real・build-only）、ネットワーク `codingagent_net`、ボリューム、`restart: always`、consumer への `docker.sock` のマウント。consumer の台数で同時処理数を増やす | `RQ-FT-RUN-CLI-CONTAINER`、`RQ-NF-CONCURRENT-TASKS`、`RQ-OP-HEALTH-MONITORING`、`RQ-UI-ENV-SETTINGS` |
-| `DS-OP-COMPOSE-ZSCALER-RUNTIME-FT-APPLY-ZSCALER-SETTINGS-RUNTIME` | Zscaler 環境対応 | `docker-compose.yml`: ① 自前のイメージのすべてのビルドに、追加のビルドコンテキスト `zscaler: ./.zscaler`、ビルド引数のプロキシの宛先と除外宛先、ホストネットワークを付ける。② backend・producer・consumer・litellm_real・test_playwright・test_playwright_real に、環境変数ファイル `.zscaler/zscaler.env` と追加のホスト名 `host.docker.internal:host-gateway` を付ける。③ litellm_real に証明書の束を `/etc/zscaler/ca-bundle.pem` へ読み取り専用でマウントし、`SSL_CERT_FILE` をそこへ向け、`AIOHTTP_TRUST_ENV=True` を設定する。④ test_playwright・test_playwright_real に同じ束をマウントし、`NODE_EXTRA_CA_CERTS` をそこへ向ける。⑤ build-only のプロファイルに `cli_exec_base` を足し、Claude Code 用と opencode 用は追加のビルドコンテキスト `base: service:cli_exec_base` で土台を使う。⑥ test のプロファイルに `unit_test` を足す | `RQ-FT-APPLY-ZSCALER-SETTINGS-RUNTIME`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
+| `DS-OP-COMPOSE-ZSCALER-RUNTIME-FT-APPLY-ZSCALER-SETTINGS-RUNTIME` | Zscaler 環境対応 | `docker-compose.yml`: ① 自前のイメージのすべてのビルドに、追加のビルドコンテキスト `zscaler: ./.zscaler`、ビルド引数のプロキシの宛先と除外宛先、追加のホスト名 `host.docker.internal:host-gateway` を付ける（ホストネットワークは使わない）。② backend・producer・consumer・litellm_real・test_playwright・test_playwright_real に、環境変数ファイル `.zscaler/zscaler.env` と追加のホスト名 `host.docker.internal:host-gateway` を付ける。③ litellm_real に証明書の束を `/etc/zscaler/ca-bundle.pem` へ読み取り専用でマウントし、`SSL_CERT_FILE` をそこへ向け、`AIOHTTP_TRUST_ENV=True` を設定する。④ test_playwright・test_playwright_real に同じ束をマウントし、`NODE_EXTRA_CA_CERTS` をそこへ向ける。⑤ build-only のプロファイルに `cli_exec_base` を足し、Claude Code 用と opencode 用は追加のビルドコンテキスト `base: service:cli_exec_base` で土台を使う。⑥ test のプロファイルに `unit_test` を足す | `RQ-FT-APPLY-ZSCALER-SETTINGS-RUNTIME`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
 | `DS-OP-DEFAULT-TEMPLATES-FT-SETUP-INITIAL-DATA` | 既定のテンプレート | `default-template/f3_prompt_template.md`（ブランチ名と MR のタイトルを JSON で出させる）と `f4_prompt_template.md` | `RQ-FT-SETUP-INITIAL-DATA` |
 | `DS-OP-DOCKERFILE-ZSCALER-BUILD-FT-APPLY-ZSCALER-SETTINGS-BUILD` | Zscaler 環境対応 | backend・producer・consumer・frontend（ビルド段）の Dockerfile の、外へ出る最初の処理の前に、追加のビルドコンテキスト `zscaler` をマウントした導入処理の実行を足し、4-2-2 の環境変数を設定する。consumer の Dockerfile には、実行段に pytest 9.2.0 を足したテスト段を加える（`unit_test` が使う） | `RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
 | `DS-OP-ENV-EXAMPLE-ZSCALER-NF-EXISTING-ENV-MIGRATION` | Zscaler 環境対応 | `.env.example` に Zscaler 設定の 3 項目を説明付きで足す（`ZSCALER_ENABLED=true`、ほかは空）。README に、既存の社外の環境は `ZSCALER_ENABLED=false` を書き足すことを書く | `RQ-NF-EXISTING-ENV-MIGRATION` |

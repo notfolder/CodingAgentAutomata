@@ -8,7 +8,7 @@
   - tasks.md の実装は 2026-11-02 に済んだ。単体テスト 23 件、模擬プロキシでの通し確認、Zscaler 設定を無効にした通し確認が通った。
   - 実装は 2026-11-02 に `19522ca` でコミットした。
   - 実 LLM での確認（`./scripts/test_setup.sh --zscaler-mock --real --run-tests`）を 2026-11-02 に流した。Zscaler の E2E は 12 件通過。Playwright は Claude Code のシナリオが通り、opencode のシナリオ（T-31・T-32・T-34）は `.env` の `OPENAI_API_KEY` が空のため失敗した（opencode の既定のモデルが OpenAI の gpt-4o-mini）。2026-11-02 にユーザーの判断で、今回は流し直さないことにした。
-  - 残り: 実装中に見つけた設計とのずれ（`docs/proposals.md` の 1〜3）を isdd-post-implementation-review で正本へ反映する。4（nginx の名前の引き直し）は正本へ反映済み。
+  - 実装中に見つけた設計とのずれは、2026-11-02 に isdd-post-implementation-review で正本へ反映した（`docs/proposals.md` は削除済み）。残りは PR #10 のレビューと取り込み。
 - **opencode で Claude のモデルを使えるようにする**（新しい変更要求の候補。isdd-change-req から始める）
   - 今は opencode で Claude のモデルを選ぶと動かない。2026-11-02 に模擬の LiteLLM で確かめた。
   - 要るもの: consumer（`consumer/cli_adapter_resolver.py`）が Anthropic のモデルのときにキーを `ANTHROPIC_API_KEY` で渡すこと、宛先の末尾に `/v1` を付けること、LiteLLM の設定に opencode が呼ぶ小さいモデル `claude-haiku-5-5` を足す（または opencode の小さいモデルを指定する）こと。
@@ -17,8 +17,8 @@
 ## テスト環境で気づいたこと
 
 - Playwright の E2E の TS-A-6 が、1 回目に失敗し再試行で通ることがある（2026-11-01 の模擬プロキシでの通し確認）。2026-11-02 の無効での通し確認では 1 回目で通った。
-- （直した）Playwright の E2E の users のテストが、テスト用のユーザーが溜まると失敗し、保存の失敗も見逃していた。2026-11-02 に、各テストが自分のユーザーを作って消す形に直し、テストの終わりにテスト用のユーザーを片付けるようにした（`docs/proposals.md` の 5）。
-- （直した）frontend の nginx は backend のアドレスを起動時に 1 回だけ引いていた（`frontend/nginx.conf` の `proxy_pass http://backend:8000`）。backend のコンテナだけが作り直されると、frontend が古いアドレスへつなぎ続けてログインが 502 になる。Zscaler の設定を変えてイメージを作り直したときに 2026-11-02 に起きた。同じ日に、nginx が要求のたびに名前を引き直すように直した（`docs/proposals.md` の 4）。
+- （直した）Playwright の E2E の users のテストが、テスト用のユーザーが溜まると失敗し、保存の失敗も見逃していた。2026-11-02 に、各テストが自分のユーザーを作って消す形に直し、テストの終わりにテスト用のユーザーを片付けるようにした（詳細設計書 8-4 に反映済み）。
+- （直した）frontend の nginx は backend のアドレスを起動時に 1 回だけ引いていた（`frontend/nginx.conf` の `proxy_pass http://backend:8000`）。backend のコンテナだけが作り直されると、frontend が古いアドレスへつなぎ続けてログインが 502 になる。Zscaler の設定を変えてイメージを作り直したときに 2026-11-02 に起きた。同じ日に、nginx が要求のたびに名前を引き直すように直した（詳細設計書 9-1 に反映済み）。
 - OrbStack のマシンでは、コンテナで Playwright のブラウザを取得した直後の数十秒、外への最初の接続が詰まる（ERR_SOCKET_NOT_CONNECTED など）。公式の Playwright イメージでも同じ。Zscaler の E2E の標準のブラウザの確認は、開き直しを 3 回まで行うようにした。CLI のエージェントが対象リポジトリのテストで同じ目に遭うかもしれない。
 
 ## 不具合の可能性（逆引きで見つけた、既存の要件定義書とコードの食い違い）
