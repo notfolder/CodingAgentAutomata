@@ -5,7 +5,15 @@
 - **Zscaler 環境対応**（ブランチ `feature/zscaler-support`）
   - 変更要件定義書・変更詳細設計書・tasks.md ができている（`.history/20261101-zscaler-support/`）。
   - 既存コードの isdd 化（正本 `docs/requirements.md`・`docs/detail_design.md` と対応表 `docs/trace_map.md`）と、Zscaler の変更の正本への反映は 2026-11-01 に済んだ。
-  - 次は isdd-traceable-coding で tasks.md を上から実装する。まだコミットしていない。
+  - tasks.md の実装は 2026-11-02 に済んだ。単体テスト 23 件、模擬プロキシでの通し確認、Zscaler 設定を無効にした通し確認が通った。実装はまだコミットしていない。
+  - 残り: 実装中に見つけた設計とのずれ（`docs/proposals.md` の 3 件）を isdd-post-implementation-review で正本へ反映する。実 LLM での確認（`./scripts/test_setup.sh --zscaler-mock --real --run-tests`）はまだ流していない。
+
+## テスト環境で気づいたこと
+
+- Playwright の E2E の TS-A-6 が、1 回目に失敗し再試行で通ることがある（2026-11-01 の模擬プロキシでの通し確認）。2026-11-02 の無効での通し確認では 1 回目で通った。
+- Playwright の E2E の users の T-01（管理者が新規ユーザーを登録できる）が、2026-11-02 の模擬プロキシでの通し確認で 1 回目に失敗し再試行で通った（登録後 5 秒以内に一覧へ戻らなかった）。
+- frontend の nginx は backend のアドレスを起動時に 1 回だけ引く（`frontend/nginx.conf` の `proxy_pass http://backend:8000`）。backend のコンテナだけが作り直されると、frontend が古いアドレスへつなぎ続けてログインが 502 になる。Zscaler の設定を変えてイメージを作り直したときに 2026-11-02 に起きた（frontend の再起動で直った）。直すかはユーザーの判断待ち。
+- OrbStack のマシンでは、コンテナで Playwright のブラウザを取得した直後の数十秒、外への最初の接続が詰まる（ERR_SOCKET_NOT_CONNECTED など）。公式の Playwright イメージでも同じ。Zscaler の E2E の標準のブラウザの確認は、開き直しを 3 回まで行うようにした。CLI のエージェントが対象リポジトリのテストで同じ目に遭うかもしれない。
 
 ## 不具合の可能性（逆引きで見つけた、既存の要件定義書とコードの食い違い）
 

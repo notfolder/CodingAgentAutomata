@@ -41,18 +41,20 @@ flowchart LR
 
 ## 起動方法
 
+起動とビルドは `./scripts/compose.sh` から行います（Zscaler 設定の準備を行ってから `docker compose` を実行します）。Zscaler を使わない環境では、先に `.env` に `ZSCALER_ENABLED=false` を書いてください（「Zscaler 環境での構築」を参照）。
+
 ### 本番環境起動
 
 ```bash
-docker compose up -d --build
+./scripts/compose.sh up -d --build
 ```
 
-GitLab・LiteLLM Proxy を含まず、本システムコンポーネント（producer / consumer / backend / frontend / postgresql / rabbitmq）のみが起動します。
+GitLab・LiteLLM Proxy を含まず、本システムコンポーネント（producer / consumer / backend / frontend / postgresql / rabbitmq）のみが起動します。`.env` を変えたら、同じコマンドで準備し直してください。
 
 ### テスト環境起動
 
 ```bash
-docker compose --profile test up -d --build
+./scripts/compose.sh --profile test up -d --build
 ```
 
 GitLab CE・LiteLLM Proxy を含む全コンポーネントが起動します。
@@ -63,13 +65,37 @@ GitLab CE・LiteLLM Proxy を含む全コンポーネントが起動します。
 ./scripts/build_cli_exec.sh
 ```
 
-Claude Code 用・opencode 用の cli-exec コンテナイメージをビルドします。
+共通の土台（Ubuntu 24.04）と、Claude Code 用・opencode 用の cli-exec コンテナイメージをビルドします。追加の言語やツールは、環境変数 `CLI_EXTRA_SETUP_COMMANDS` に apt の書き方で渡します（例: `CLI_EXTRA_SETUP_COMMANDS="apt-get update && apt-get install -y --no-install-recommends golang ruby" ./scripts/build_cli_exec.sh`）。以前の Alpine の書き方（`apk add ...`）はビルドが失敗します。
+
+---
+
+## Zscaler 環境での構築
+
+Zscaler（明示型のプロキシで、通信の証明書を差し替える）の配下では、次の準備をしてから起動します。外へ出るすべての通信が Zscaler のプロキシを経由し、Zscaler の証明書で検証されます。
+
+1. **ホストの準備（社内の Linux サーバーで、sudo で一度だけ行う。Ubuntu の例）**
+   - Zscaler の証明書を `/usr/local/share/ca-certificates/zscaler.crt` に置き、`sudo update-ca-certificates` を実行する。
+   - Docker デーモンにプロキシを設定する: `/etc/systemd/system/docker.service.d/http-proxy.conf` に `[Service]` と `Environment="HTTP_PROXY=http://プロキシ:ポート" "HTTPS_PROXY=http://プロキシ:ポート" "NO_PROXY=localhost,127.0.0.1"` を書き、`sudo systemctl daemon-reload && sudo systemctl restart docker` を実行する。
+2. **証明書ファイル**: プロジェクト直下の `certs/zscaler-ca.pem` に PEM 形式で置く（中間証明書をまとめてよい）。置かなければ、ホストの OS の証明書の束を使う。`certs/` は git に入れない。
+3. **`.env` の Zscaler 設定**
+
+   | 変数名 | 説明 |
+   |---|---|
+   | `ZSCALER_ENABLED` | `true` か `false`。書いていない場合は `true` |
+   | `ZSCALER_PROXY_URL` | Zscaler のプロキシの宛先（`http://ホスト名:ポート`）。`true` のときは必須 |
+   | `ZSCALER_NO_PROXY_EXTRA` | プロキシを経由させない社内の宛先（社内の GitLab、社内の LLM のプロキシなど。カンマ区切り）。本システムの部品の名前は自動で入る |
+
+4. **起動**: `./scripts/compose.sh up -d --build`。ビルドと起動の前に、プロキシ経由で PyPI へつないで証明書を検証できるかを確かめ、できなければ原因を表示して止まります。
+5. **社外の環境**: Zscaler を使わない環境では `.env` に `ZSCALER_ENABLED=false` と書きます。既存の `.env` にはこの項目が無く、有効とみなされて止まるので、書き足してください。
+6. **社外での確認**: `./scripts/test_setup.sh --zscaler-mock` で、Zscaler の役をする模擬プロキシ（mitmproxy）を経由して構築します（`--run-tests` で E2E、`--real` で実 LLM も）。`certs/` と `.env` は書き換えません。
+
+CLI エージェントには、Zscaler の配下であること、証明書の場所、開発するシステムに証明書とプロキシの扱いを組み込むことをプロンプトで伝えます。Playwright の Chromium と WebKit は Zscaler の証明書を信頼済みです（Firefox は信頼させる方法が無いため対象外）。
 
 ---
 
 ## システムセットアップ手順
 
-`docker compose up -d --build` 実行後に **初回のみ** 以下のコマンドを実行してください。
+`./scripts/compose.sh up -d --build` 実行後に **初回のみ** 以下のコマンドを実行してください。
 
 ```bash
 ./scripts/setup.sh \
@@ -88,6 +114,10 @@ Claude Code 用・opencode 用の cli-exec コンテナイメージをビルド�
 - F-3 / F-4 初期プロンプトテンプレートの DB 投入
 - 組み込み CLI アダプタ（`claude`・`opencode`）の登録
 
+### 初期ユーザー
+
+最初の管理者ユーザーは、上の `setup.sh` の引数（`--username`・`--email`・`--password`）で作ります。Web 管理画面（`http://localhost/`）に、そのユーザー名とパスワードでログインします。引数を省くと対話で入力を求めます。
+
 ---
 
 ## テスト環境セットアップ手順
@@ -104,6 +134,20 @@ Claude Code 用・opencode 用の cli-exec コンテナイメージをビルド�
 
 ```bash
 ./scripts/test_setup.sh --real
+```
+
+**模擬プロキシ（Zscaler の役）を経由するモード**（`--real`・`--run-tests` と組み合わせられる）:
+
+```bash
+./scripts/test_setup.sh --zscaler-mock --run-tests
+```
+
+Zscaler の配下でない開発環境で模擬プロキシを使わないときは、`.env` に `ZSCALER_ENABLED=false` を書くか、`ZSCALER_ENABLED=false ./scripts/test_setup.sh` で実行します。
+
+**単体テスト・結合テスト**:
+
+```bash
+docker compose --profile test run --rm unit_test
 ```
 
 このコマンドにより以下が自動実行されます:

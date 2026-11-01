@@ -56,11 +56,17 @@ jobs:
       - name: Docker Buildx のセットアップ
         uses: docker/setup-buildx-action@v3
 
+      # 公開するイメージには Zscaler の証明書を入れない（Zscaler 設定を無効にして準備する）
+      - name: Zscaler 設定の準備（無効）
+        run: ZSCALER_ENABLED=false ./scripts/zscaler_prepare.sh
+
       - name: イメージのビルドとプッシュ（${{ matrix.service }}）
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
+          build-contexts: |
+            zscaler=.zscaler
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}-${{ matrix.image_suffix }}:latest

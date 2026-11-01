@@ -6,6 +6,21 @@
 # CLIイメージビルド専用:   docker compose --profile build-only build
 # =============================================================
 
+# -------------------------------------------------------
+# Zscaler 設定（scripts/zscaler_prepare.sh が .zscaler/ に作る生成物を使う）
+# ビルド用のプロキシの宛先は ./scripts/compose.sh などが環境に入れる
+# -------------------------------------------------------
+x-zscaler-build-args: &zscaler-build-args
+  HTTP_PROXY: ${ZSCALER_BUILD_PROXY:-}
+  HTTPS_PROXY: ${ZSCALER_BUILD_PROXY:-}
+  http_proxy: ${ZSCALER_BUILD_PROXY:-}
+  https_proxy: ${ZSCALER_BUILD_PROXY:-}
+  NO_PROXY: ${ZSCALER_BUILD_NO_PROXY:-}
+  no_proxy: ${ZSCALER_BUILD_NO_PROXY:-}
+
+x-zscaler-extra-hosts: &zscaler-extra-hosts
+  - "host.docker.internal:host-gateway"
+
 services:
 
   # -------------------------------------------------------
@@ -77,11 +92,16 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-      network: host
-    image: ghcr.io/notfolder/codingagentautomata-backend:latest
+      extra_hosts: *zscaler-extra-hosts
+      additional_contexts:
+        zscaler: ./.zscaler
+      args: *zscaler-build-args
+    image: codingagentautomata-backend:local
     restart: always
     env_file:
       - .env
+      - .zscaler/zscaler.env
+    extra_hosts: *zscaler-extra-hosts
     ports:
       - "8000:8000"
     depends_on:
@@ -99,8 +119,11 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
-      network: host
-    image: ghcr.io/notfolder/codingagentautomata-frontend:latest
+      extra_hosts: *zscaler-extra-hosts
+      additional_contexts:
+        zscaler: ./.zscaler
+      args: *zscaler-build-args
+    image: codingagentautomata-frontend:local
     restart: always
     ports:
       - "80:80"
@@ -116,13 +139,18 @@ services:
     build:
       context: .
       dockerfile: producer/Dockerfile
-      network: host
-    image: ghcr.io/notfolder/codingagentautomata-producer:latest
+      extra_hosts: *zscaler-extra-hosts
+      additional_contexts:
+        zscaler: ./.zscaler
+      args: *zscaler-build-args
+    image: codingagentautomata-producer:local
     restart: always
     env_file:
       - .env
       - path: .env.test
         required: false
+      - .zscaler/zscaler.env
+    extra_hosts: *zscaler-extra-hosts
     environment:
       # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
       GITLAB_API_URL: http://gitlab:8929
@@ -140,8 +168,12 @@ services:
     build:
       context: .
       dockerfile: consumer/Dockerfile
-      network: host
-    image: ghcr.io/notfolder/codingagentautomata-consumer:latest
+      extra_hosts: *zscaler-extra-hosts
+      target: runtime
+      additional_contexts:
+        zscaler: ./.zscaler
+      args: *zscaler-build-args
+    image: codingagentautomata-consumer:local
     restart: always
     # 処理中タスクの完了を待つためのグレースフルシャットダウン期間
     # CLI_EXEC_TIMEOUT_SEC(90秒) + 余裕 → 120秒
@@ -150,6 +182,8 @@ services:
       - .env
       - path: .env.test
         required: false
+      - .zscaler/zscaler.env
+    extra_hosts: *zscaler-extra-hosts
     environment:
       # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
       GITLAB_API_URL: http://gitlab:8929
@@ -171,7 +205,7 @@ services:
   mock_llm:
     build:
       context: mock-llm/
-    image: ghcr.io/notfolder/codingagentautomata-mock-llm:latest
+    image: codingagentautomata-mock-llm:local
     restart: always
     profiles:
       - test
@@ -260,7 +294,13 @@ services:
       - test-real
     # config-real.yml を明示的に指定して起動
     command: ["--config", "/app/config.yml", "--port", "4000"]
+    env_file:
+      - .zscaler/zscaler.env
+    extra_hosts: *zscaler-extra-hosts
     environment:
+      # 外への通信を Zscaler の証明書の束で検証する
+      SSL_CERT_FILE: /etc/zscaler/ca-bundle.pem
+      AIOHTTP_TRUST_ENV: "True"
       # LiteLLM の Master Key（Virtual Key 発行・検証に使用）
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
       # PostgreSQL への接続（litellm 専用 DB を使用）
@@ -276,6 +316,7 @@ services:
       - "4001:4000"
     volumes:
       - ./litellm/config-real.yml:/app/config.yml
+      - ./.zscaler/ca-bundle.pem:/etc/zscaler/ca-bundle.pem:ro
     depends_on:
       postgresql_litellm:
         condition: service_healthy
@@ -300,8 +341,12 @@ services:
     env_file:
       - path: .env.test
         required: false
+      - .zscaler/zscaler.env
+    extra_hosts: *zscaler-extra-hosts
     environment:
       LLM_MODE: mock
+      # npm の通信を Zscaler の証明書の束で検証する
+      NODE_EXTRA_CA_CERTS: /etc/zscaler/ca-bundle.pem
       # コンテナ内から到達可能なDockerサービス名でURLを上書き
       GITLAB_API_URL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
@@ -320,6 +365,7 @@ services:
       WEBHOOK_URL: http://producer:8080/webhook
     volumes:
       - ./e2e:/e2e
+      - ./.zscaler/ca-bundle.pem:/etc/zscaler/ca-bundle.pem:ro
     networks:
       - codingagent_net
     depends_on:
@@ -343,8 +389,12 @@ services:
     env_file:
       - path: .env.test
         required: false
+      - .zscaler/zscaler.env
+    extra_hosts: *zscaler-extra-hosts
     environment:
       LLM_MODE: real
+      # npm の通信を Zscaler の証明書の束で検証する
+      NODE_EXTRA_CA_CERTS: /etc/zscaler/ca-bundle.pem
       # コンテナ内から到達可能なDockerサービス名でURLを上書き
       GITLAB_API_URL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
@@ -360,6 +410,7 @@ services:
       WEBHOOK_URL: http://producer:8080/webhook
     volumes:
       - ./e2e:/e2e
+      - ./.zscaler/ca-bundle.pem:/etc/zscaler/ca-bundle.pem:ro
     networks:
       - codingagent_net
     depends_on:
@@ -368,11 +419,31 @@ services:
       - producer
 
   # -------------------------------------------------------
+  # CLI exec の共通の土台イメージ（ビルド専用）
+  # -------------------------------------------------------
+  cli_exec_base:
+    build:
+      context: cli-exec/base/
+      extra_hosts: *zscaler-extra-hosts
+      additional_contexts:
+        zscaler: ./.zscaler
+      args: *zscaler-build-args
+    image: coding-agent-cli-exec-base:local
+    profiles:
+      - build-only
+
+  # -------------------------------------------------------
   # Claude CLI exec イメージビルド専用サービス
   # -------------------------------------------------------
   cli_exec_claude:
     build:
       context: cli-exec/claude/
+      extra_hosts: *zscaler-extra-hosts
+      additional_contexts:
+        base: service:cli_exec_base
+      args:
+        <<: *zscaler-build-args
+        EXTRA_SETUP_COMMANDS: ${CLI_EXTRA_SETUP_COMMANDS:-}
     image: coding-agent-cli-exec-claude:latest
     profiles:
       - build-only
@@ -385,11 +456,41 @@ services:
   cli_exec_opencode:
     build:
       context: cli-exec/opencode/
+      extra_hosts: *zscaler-extra-hosts
+      additional_contexts:
+        base: service:cli_exec_base
+      args:
+        <<: *zscaler-build-args
+        EXTRA_SETUP_COMMANDS: ${CLI_EXTRA_SETUP_COMMANDS:-}
     image: coding-agent-cli-exec-opencode:latest
     profiles:
       - build-only
     networks:
       - codingagent_net
+
+  # -------------------------------------------------------
+  # 単体テスト・結合テスト（consumer のイメージのテスト段）
+  # 実行: docker compose --profile test run --rm unit_test
+  # -------------------------------------------------------
+  unit_test:
+    build:
+      context: .
+      dockerfile: consumer/Dockerfile
+      extra_hosts: *zscaler-extra-hosts
+      target: test
+      additional_contexts:
+        zscaler: ./.zscaler
+      args: *zscaler-build-args
+    image: codingagentautomata-unit-test:local
+    profiles:
+      - test
+    network_mode: none
+    working_dir: /repo
+    environment:
+      PYTHONPATH: /repo
+    volumes:
+      - ./:/repo:ro
+    command: ["python", "-m", "pytest", "/repo/tests", "-q", "-p", "no:cacheprovider"]
 
 # =============================================================
 # ボリューム定義

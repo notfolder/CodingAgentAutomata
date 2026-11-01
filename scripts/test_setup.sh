@@ -4,6 +4,9 @@
 #   ./scripts/test_setup.sh              # モック LLM モード（実 API キー不要）
 #   ./scripts/test_setup.sh --real       # 実 LLM モード（ANTHROPIC_API_KEY / OPENAI_API_KEY 必要）
 #   ./scripts/test_setup.sh --run-tests  # セットアップ後に E2E テストも実行する
+#   ./scripts/test_setup.sh --zscaler-mock  # Zscaler の役をする模擬プロキシを経由して構築する
+#     （--real・--run-tests と組み合わせられる）
+#   --run-tests では Playwright の E2E の後に Zscaler の E2E（e2e/zscaler）も実行する
 set -e
 
 # スクリプトが存在するディレクトリの親（プロジェクトルート）を基準にする
@@ -13,12 +16,20 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # オプション解析
 REAL_LLM=false
 RUN_TESTS=false
+ZSCALER_MOCK=false
 for arg in "$@"; do
     case "$arg" in
         --real) REAL_LLM=true ;;
         --run-tests) RUN_TESTS=true ;;
+        --zscaler-mock) ZSCALER_MOCK=true ;;
     esac
 done
+
+# .env の読み込みと Zscaler 設定の準備の共通処理
+# shellcheck source=lib/env.sh
+source "${SCRIPT_DIR}/lib/env.sh"
+# shellcheck source=lib/zscaler.sh
+source "${SCRIPT_DIR}/lib/zscaler.sh"
 
 # -------------------------------------------------------
 # ステップ 0: .env が存在しない場合は .env.example から生成する
@@ -26,42 +37,6 @@ done
 ENV_FILE="${PROJECT_ROOT}/.env"
 ENV_EXAMPLE="${PROJECT_ROOT}/.env.example"
 ENV_TEST_FILE="${PROJECT_ROOT}/.env.test"
-
-load_env_file() {
-    local file_path="$1"
-    if [ ! -f "${file_path}" ]; then
-        return 0
-    fi
-
-    while IFS= read -r line || [ -n "${line}" ]; do
-        # コメント行と空行をスキップ
-        case "${line}" in
-            ''|'#'*)
-                continue
-                ;;
-        esac
-
-        # KEY=VALUE 形式のみ受け付ける
-        if [[ "${line}" != *=* ]]; then
-            continue
-        fi
-
-        local key="${line%%=*}"
-        local value="${line#*=}"
-
-        # 末尾CRを除去
-        key="${key%$'\r'}"
-        value="${value%$'\r'}"
-
-        # 既存のダブルクォートを剥がす
-        if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
-            value="${value#\"}"
-            value="${value%\"}"
-        fi
-
-        export "${key}=${value}"
-    done < "${file_path}"
-}
 
 if [ ! -f "${ENV_FILE}" ]; then
     echo "[ステップ 0] .env が存在しないため .env.example をコピーして生成します..."
@@ -112,6 +87,36 @@ TEST_GROUP_PATH="${TEST_GROUP_PATH:-coding-agent-test-group}"
 TEST_PROJECT_NAME="${TEST_PROJECT_NAME:-coding-agent-test}"
 
 echo "テスト環境セットアップを開始します..."
+
+# -------------------------------------------------------
+# ステップ 0.5: Zscaler 設定の準備（--zscaler-mock なら模擬プロキシを起動してから模擬の値で）
+# -------------------------------------------------------
+# 模擬プロキシを起動し、認証局の証明書が書き出されるまで最大 60 秒待つ
+start_zscaler_mock() {
+    local ca_file="${PROJECT_ROOT}/zscaler-mock/.data/mitmproxy-ca-cert.pem"
+    echo "[ステップ 0.5] 模擬プロキシ（Zscaler の役）を起動します..."
+    mkdir -p "${PROJECT_ROOT}/zscaler-mock/.data"
+    docker compose -f "${PROJECT_ROOT}/zscaler-mock/compose.yaml" up -d
+    for i in $(seq 1 60); do
+        if [ -s "${ca_file}" ]; then
+            echo "  模擬プロキシの認証局の証明書を確認しました: ${ca_file}"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "エラー: 模擬プロキシが 60 秒以内に認証局の証明書を書き出しませんでした: ${ca_file}" >&2
+    return 1
+}
+
+echo ""
+if [ "${ZSCALER_MOCK}" = "true" ]; then
+    start_zscaler_mock || exit 1
+    zscaler_prepare --mock || exit 1
+else
+    echo "[ステップ 0.5] Zscaler 設定を準備します..."
+    zscaler_prepare || exit 1
+fi
+zscaler_export_build_env "${PROJECT_ROOT}"
 
 # -------------------------------------------------------
 # ステップ 1: テスト環境のサービスを起動する
@@ -369,7 +374,15 @@ elif ! is_python_310_or_later "${VENV_DIR}/bin/python3"; then
     echo "  既存の venv が Python 3.10 未満のため作り直します: ${VENV_DIR}"
     "${SETUP_PYTHON}" -m venv --clear "${VENV_DIR}"
 fi
-"${VENV_DIR}/bin/pip" install requests -q
+# ホストの仮想環境に必要なライブラリを入れる。Zscaler 設定が有効なら証明書の束とプロキシの宛先を pip に渡す
+install_host_python_deps() {
+    local pip_args=(install -q requests "pytest==9.2.0")
+    if [ "$(cat "${PROJECT_ROOT}/.zscaler/state" 2>/dev/null)" = "enabled" ]; then
+        pip_args+=(--cert "${PROJECT_ROOT}/.zscaler/ca-bundle.pem" --proxy "${ZSCALER_HOST_PROXY}")
+    fi
+    "${VENV_DIR}/bin/pip" "${pip_args[@]}"
+}
+install_host_python_deps
 
 # GitLab コンテナから Producer の Webhook エンドポイントへ到達するには
 # Docker ネットワーク内部のサービス名を使用する必要がある
@@ -684,5 +697,19 @@ if [ "${RUN_TESTS}" = "true" ]; then
     if [ ${PLAYWRIGHT_EXIT_CODE} -ne 0 ]; then
         echo "エラー: E2E テストが失敗しました (exit code: ${PLAYWRIGHT_EXIT_CODE})" >&2
         exit ${PLAYWRIGHT_EXIT_CODE}
+    fi
+
+    # Zscaler の E2E も実行する（模擬プロキシの有無で、確かめるシナリオが変わる）
+    if true; then
+        echo ""
+        echo "[ステップ 8] Zscaler の E2E を実行します（e2e/zscaler）..."
+        set +e
+        E2E_REAL_LLM="${REAL_LLM}" "${VENV_DIR}/bin/python3" -m pytest "${PROJECT_ROOT}/e2e/zscaler" -q -p no:cacheprovider
+        ZSCALER_E2E_EXIT_CODE=$?
+        set -e
+        if [ ${ZSCALER_E2E_EXIT_CODE} -ne 0 ]; then
+            echo "エラー: Zscaler の E2E が失敗しました (exit code: ${ZSCALER_E2E_EXIT_CODE})" >&2
+            exit ${ZSCALER_E2E_EXIT_CODE}
+        fi
     fi
 fi

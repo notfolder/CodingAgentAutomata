@@ -127,15 +127,25 @@ async def main() -> None:
     from consumer.issue_to_mr_converter import IssueToMRConverter
     from consumer.mr_processor import MRProcessor
     from consumer.task_processor import TaskProcessor
+    from consumer.zscaler_settings import ZscalerSettings
 
+    # Zscaler 設定（.zscaler/zscaler.env から compose が渡す環境変数）
+    zscaler_settings = ZscalerSettings.from_env()
+    logger.info("Consumer: Zscaler 設定 enabled=%s", zscaler_settings.enabled)
     virtual_key_service = VirtualKeyService()
     cli_log_masker = CLILogMasker()
     cli_adapter_resolver = CLIAdapterResolver(db_session_factory=db_session_factory)
-    prompt_builder = PromptBuilder(db_session_factory=db_session_factory)
+    prompt_builder = PromptBuilder(
+        db_session_factory=db_session_factory,
+        zscaler_settings=zscaler_settings,
+    )
     # DB から全アダプターのコンテナイメージを取得し、ウォームアップに使用する
     # （CLIContainerManager 初期化より先に cli_adapter_resolver を生成しておく必要がある）
     warmup_images = cli_adapter_resolver.fetch_all_container_images()
-    cli_container_manager = CLIContainerManager(warmup_images=warmup_images)
+    cli_container_manager = CLIContainerManager(
+        warmup_images=warmup_images,
+        zscaler_settings=zscaler_settings,
+    )
 
     # ProgressManager ファクトリ関数
     # project_id と mr_iid を受け取って ProgressManager インスタンスを返す
