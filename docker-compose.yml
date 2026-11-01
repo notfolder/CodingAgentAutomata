@@ -361,6 +361,9 @@ services:
       # 管理者・テストユーザー認証情報
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123456}
       TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
+      # LiteLLM の宛先と Master Key（テストの中で本物の Virtual Key を発行するのに使う）
+      LITELLM_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
       # Webhook エンドポイント（グループWebhookテスト用）
       WEBHOOK_URL: http://producer:8080/webhook
     volumes:
@@ -406,6 +409,9 @@ services:
       # 管理者・テストユーザー認証情報
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin@123456}
       TEST_USER_PASSWORD: ${TEST_USER_PASSWORD:-Test@123456}
+      # LiteLLM の宛先と Master Key（テストの中で本物の Virtual Key を発行するのに使う）
+      LITELLM_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-litellm-master-e2e-test}
       # Webhook エンドポイント（グループWebhookテスト用）
       WEBHOOK_URL: http://producer:8080/webhook
     volumes:
