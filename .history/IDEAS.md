@@ -27,3 +27,4 @@
 
 - OrbStack のマシンでは、コンテナで Playwright のブラウザを取得した直後の数十秒、外への最初の接続が詰まる（ERR_SOCKET_NOT_CONNECTED など）。公式の Playwright イメージでも同じ。CLI のエージェントが対象リポジトリのテストで同じ目に遭うかもしれない（追加 2026-11-02）
 - 管理画面のユーザー作成は bcrypt（コスト 12）でパスワードをハッシュにするため、CLI コンテナなどが CPU を使っていると数秒かかる（追加 2026-11-02）
+- opencode の OpenAI の経路では、タイトル用のモデル（`gpt-5.4-nano-flex`）が LiteLLM に無く、毎回 400 になってから opencode が別のモデルで呼び直している。処理は完了する。直すなら、Claude の経路と同じく `small_model` に本体のモデルを指定する（追加 2026-11-02、詳細: `external/litellm/docs/research.md`）
