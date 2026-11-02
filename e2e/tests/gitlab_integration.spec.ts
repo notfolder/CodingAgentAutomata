@@ -840,6 +840,8 @@ test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () =
 });
 
 test('T-33: Claude Code が docker-compose を使用できることを検証', async () => {
+  // モック LLM は実際にファイルを作らず docker compose も動かさないため、実 LLM のモードでだけ確かめる
+  test.skip(process.env.LLM_MODE !== 'real', '実 LLM のモードでだけ確かめる');
   await waitForFlakyTestBarrier();
   const projectId = GITLAB_PROJECT_ID;
   const issueSuffix = Date.now();
@@ -907,6 +909,8 @@ test('T-33: Claude Code が docker-compose を使用できることを検証', a
 });
 
 test('T-34: opencode が docker-compose を使用できることを検証', async () => {
+  // モック LLM は実際にファイルを作らず docker compose も動かさないため、実 LLM のモードでだけ確かめる
+  test.skip(process.env.LLM_MODE !== 'real', '実 LLM のモードでだけ確かめる');
   await waitForFlakyTestBarrier();
   const projectId = GITLAB_PROJECT_ID;
   const issueSuffix = Date.now();

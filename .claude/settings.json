@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/isdd/check.sh\" >/dev/null 2>&1 || echo '{\"systemMessage\":\"isdd: 対応表チェックでエラーがあります（bash scripts/isdd/check.sh で確認）\"}'",
+            "timeout": 60,
+            "statusMessage": "isdd の対応表チェック"
+          }
+        ]
+      }
+    ]
+  }
+}

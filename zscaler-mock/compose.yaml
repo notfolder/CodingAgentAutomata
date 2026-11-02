@@ -1,0 +1,27 @@
+# 模擬プロキシ（Zscaler の役をするテスト用のプロキシ）
+# 本システムとは別の compose プロジェクトとして起動する。
+# 起動: docker compose -f zscaler-mock/compose.yaml up -d（通常は ./scripts/test_setup.sh --zscaler-mock が起動する）
+# 明示型（regular モード）で 8080 番で待ち受け、ホストの 18080 番に公開する。
+# 起動時に作られる認証局の証明書は zscaler-mock/.data/mitmproxy-ca-cert.pem に書き出される。
+name: zscaler-mock
+
+services:
+  zscaler_mock:
+    image: mitmproxy/mitmproxy:12.3.1
+    command:
+      - mitmdump
+      - --mode
+      - regular
+      - --listen-host
+      - 0.0.0.0
+      - --listen-port
+      - "8080"
+      - --set
+      - block_global=false
+      - --set
+      - flow_detail=1
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./.data:/home/mitmproxy/.mitmproxy
+    restart: unless-stopped

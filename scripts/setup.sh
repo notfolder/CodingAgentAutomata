@@ -9,6 +9,12 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
+# Zscaler 設定の準備（呼び出し元で準備済みなら繰り返さない）
+source "${SCRIPT_DIR}/lib/env.sh"
+source "${SCRIPT_DIR}/lib/zscaler.sh"
+zscaler_prepare
+zscaler_export_build_env "$PROJECT_ROOT"
+
 echo "CodingAgentAutomata セットアップを開始します..."
 
 echo "[ステップ 1/2] CLI イメージ（claude / opencode）をビルドします..."

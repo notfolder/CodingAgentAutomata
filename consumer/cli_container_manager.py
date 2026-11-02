@@ -19,6 +19,8 @@ import docker.errors
 import docker.models.containers
 import requests
 
+from consumer.zscaler_settings import ZscalerSettings
+
 # ロガーを設定
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,11 @@ class CLIContainerManager:
     privileged=True（DinD構成）でコンテナを起動する。
     """
 
-    def __init__(self, warmup_images: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        warmup_images: list[str] | None = None,
+        zscaler_settings: Optional[ZscalerSettings] = None,
+    ) -> None:
         """
         初期化。
 
@@ -87,7 +93,10 @@ class CLIContainerManager:
         Args:
             warmup_images: consumer 起動時にウォームアップするイメージ名のリスト。
                            None または空リストの場合はウォームアップをスキップする。
+            zscaler_settings: Zscaler 設定（省略時は無効として扱う）
         """
+        # CLI コンテナへ渡す Zscaler 設定
+        self._zscaler_settings: ZscalerSettings = zscaler_settings or ZscalerSettings(enabled=False)
         # docker.sock 経由で Docker デーモンに接続
         # 初回起動の重いコンテナでも start() がタイムアウトしにくいよう待機時間を延長
         self._client: docker.DockerClient = docker.from_env(
@@ -184,6 +193,18 @@ class CLIContainerManager:
                     except Exception:
                         pass
 
+    def _merge_zscaler_env(self, env_vars: dict[str, str]) -> dict[str, str]:
+        """
+        渡された環境変数に Zscaler 設定の環境変数を足す（同じ名前は渡された側を優先する）。
+
+        Args:
+            env_vars: CLI アダプタ設定などから作った環境変数
+
+        Returns:
+            dict[str, str]: Zscaler 設定の環境変数を足した辞書
+        """
+        return {**self._zscaler_settings.build_cli_env(), **env_vars}
+
     def _get_self_network(self) -> Optional[str]:
         """
         Consumer コンテナ自身が参加している Docker ネットワーク名を返す。
@@ -278,8 +299,10 @@ class CLIContainerManager:
         container: docker.models.containers.Container = self._client.containers.create(
             image=image,
             name=container_name,
-            environment=env_vars,
+            environment=self._merge_zscaler_env(env_vars),
             command=command,
+            # 模擬プロキシなど、ホスト上の宛先の名前解決に使う
+            extra_hosts={"host.docker.internal": "host-gateway"},
             # DinD 構成のため privileged モードで起動
             privileged=True,
             # Consumer コンテナと同一ネットワークに接続（mock_llm/litellm へのサービス名解決のため）
@@ -421,8 +444,10 @@ class CLIContainerManager:
         container: docker.models.containers.Container = self._client.containers.create(
             image=image,
             name=container_name,
-            environment=env_vars,
+            environment=self._merge_zscaler_env(env_vars),
             command=command,
+            # 模擬プロキシなど、ホスト上の宛先の名前解決に使う
+            extra_hosts={"host.docker.internal": "host-gateway"},
             privileged=True,
             network=self._cli_network if self._cli_network else None,
             auto_remove=True,

@@ -1,0 +1,6 @@
+{
+  "runtime": "container",
+  "auth": true,
+  "external": true,
+  "e2e_dir": "e2e"
+}

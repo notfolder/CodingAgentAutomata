@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
+from consumer.zscaler_settings import ZscalerSettings
 from shared.models.db import SystemSetting
 
 # ロガーを設定
@@ -28,14 +29,35 @@ class PromptBuilder:
     テンプレートは system_settings テーブルから取得する。
     """
 
-    def __init__(self, db_session_factory: Callable[[], Session]) -> None:
+    def __init__(
+        self,
+        db_session_factory: Callable[[], Session],
+        zscaler_settings: Optional[ZscalerSettings] = None,
+    ) -> None:
         """
         初期化。
 
         Args:
             db_session_factory: SQLAlchemy Session を生成するファクトリ関数
+            zscaler_settings: Zscaler 設定（省略時は無効として扱う）
         """
         self._db_session_factory: Callable[[], Session] = db_session_factory
+        self._zscaler_settings: ZscalerSettings = zscaler_settings or ZscalerSettings(enabled=False)
+
+    def _append_zscaler_instruction(self, prompt: str) -> str:
+        """
+        Zscaler 設定が有効なら、プロンプトの末尾に区切り線を挟んで指示文を足す。
+
+        Args:
+            prompt: 変数を展開したプロンプト
+
+        Returns:
+            str: 指示文を足したプロンプト（無効ならそのまま）
+        """
+        instruction: str = self._zscaler_settings.build_instruction()
+        if not instruction:
+            return prompt
+        return f"{prompt.rstrip()}\n\n---\n\n{instruction}"
 
     def _get_system_setting(self, key: str) -> Optional[str]:
         """
@@ -104,7 +126,7 @@ class PromptBuilder:
         prompt = prompt.replace("{existing_branches}", existing_branches)
 
         logger.debug("PromptBuilder.build_f3_prompt: issue_title='%s'", issue_title)
-        return prompt
+        return self._append_zscaler_instruction(prompt)
 
     def build_f4_prompt(
         self,
@@ -183,4 +205,4 @@ class PromptBuilder:
             )
 
         logger.debug("PromptBuilder.build_f4_prompt: branch_name='%s'", branch_name)
-        return prompt
+        return self._append_zscaler_instruction(prompt)

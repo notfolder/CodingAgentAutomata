@@ -5,6 +5,14 @@ FROM python:3.12-slim
 # 作業ディレクトリを設定
 WORKDIR /app
 
+# Zscaler の証明書を OS の信頼先に入れる（外へ出る最初の処理より前。無効なら何もしない）
+RUN --mount=type=bind,from=zscaler,target=/zscaler sh /zscaler/install-ca.sh
+# 各ツールの信頼先を OS の証明書の束に向ける（Zscaler 設定の有効・無効によらない）
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    PIP_CERT=/etc/ssl/certs/ca-certificates.crt \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
 # システム依存パッケージのインストール
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
