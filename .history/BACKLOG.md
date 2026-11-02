@@ -11,7 +11,7 @@
 ## opencode で Claude のモデルを使えるようにする
 
 - [ ] isdd-change-req から変更要求として要件・設計を立て、実装する（追加 2026-11-02、重要 低）
-  - ブランチ `feature/opencode-claude-model`。事前確認・変更要件定義書・外部調査は済み（`.history/20261102-opencode-claude-model/`、`external/litellm/`）。次は isdd-change-design
+  - ブランチ `feature/opencode-claude-model`。実装済み（単体 39・E2E モック 63+11 件通過、未コミット）。次は実装後の逆引き整合（`docs/proposals.md` 1 件）と実 LLM の確認
 
 ## 既存の不具合
 
