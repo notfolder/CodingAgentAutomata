@@ -19,6 +19,7 @@
  *   T-32: testuser-opencode の MR を opencode CLI で処理できる
  *   T-33: Claude Code が docker-compose を使用できることを検証
  *   T-34: opencode が docker-compose を使用できることを検証
+ *   T-35: opencode で Claude のモデルを指定した MR 処理が完了する
  *
  * 前提条件:
  *   - docker compose --profile test up -d で GitLab CE が起動済み
@@ -837,6 +838,73 @@ test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () =
     TASK_TIMEOUT_MS
   );
   expect(hasCompletionComment).toBe(true);
+});
+
+// -----------------------------------------------------------------------
+// T-35: opencode で Claude のモデルを指定した MR 処理が完了する
+// -----------------------------------------------------------------------
+
+test('T-35: opencodeでClaudeのモデルを指定したMR処理が完了する', async () => {
+  await waitForFlakyTestBarrier();
+  const projectId = GITLAB_PROJECT_ID;
+  const suffix = Date.now();
+  const claudeModel = `anthropic/${process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001'}`;
+
+  // testuser-opencode のデフォルト CLI を opencode にする（デフォルトモデルは問わない）
+  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  const ensureOpenCodeResp = await fetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ default_cli: 'opencode' }),
+  });
+  expect(ensureOpenCodeResp.status).toBe(200);
+
+  // Issue→MR 変換（デフォルトモデルを使う）を経ずに、ブランチと Draft MR を直接作る
+  const branchName = `e2e-t35-${suffix}`;
+  const branchResp = await gitlabApi('POST', `/projects/${projectId}/repository/branches`, GITLAB_ADMIN_TOKEN, {
+    branch: branchName,
+    ref: 'main',
+  });
+  expect(branchResp.status).toBe(201);
+
+  const mrResp = await gitlabApi('POST', `/projects/${projectId}/merge_requests`, GITLAB_USER_TOKEN_OPENCODE, {
+    source_branch: branchName,
+    target_branch: 'main',
+    title: `Draft: [E2E T-35] opencode Claude モデル指定テスト ${suffix}`,
+    description: `${MR_FILE_TASK_DESCRIPTION}\n\nagent: cli=opencode model=${claudeModel}`,
+  });
+  expect(mrResp.status).toBe(201);
+  const mrIid = (mrResp.data as { iid: number }).iid;
+
+  // MR に bot をアサイン + ラベル付与（F-4: MR CLI 処理開始）
+  await triggerMR(projectId, mrIid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+  // 処理完了後の完了コメントを確認
+  const hasCompletionComment = await waitForComment(
+    projectId, 'merge_requests', mrIid, GITLAB_ADMIN_TOKEN,
+    '完了',
+    TASK_TIMEOUT_MS
+  );
+  expect(hasCompletionComment).toBe(true);
+
+  // タスクに opencode と指定した Claude のモデルが記録され、完了している
+  const recorded = await waitUntil(async () => {
+    const tasks = await getBackendTasks(adminToken, {
+      gitlab_project_id: projectId,
+      source_iid: String(mrIid),
+    });
+    return tasks.some((t: unknown) => {
+      const task = t as { task_type: string; status: string; cli_type: string | null; model: string | null };
+      return task.task_type === 'merge_request'
+        && task.status === 'completed'
+        && task.cli_type === 'opencode'
+        && task.model === claudeModel;
+    });
+  }, TASK_TIMEOUT_MS);
+  expect(recorded).toBe(true);
 });
 
 test('T-33: Claude Code が docker-compose を使用できることを検証', async () => {

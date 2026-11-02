@@ -6,6 +6,10 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 
+# モック LLM が応じない設定項目（opencode が上位のモデルに送る推論の強さなど）を捨ててから転送する
+litellm_settings:
+  drop_params: true
+
 model_list:
   # OpenAI GPT-5.5（プレフィックスあり）→ mock_llm に転送
   - model_name: openai/gpt-5.5

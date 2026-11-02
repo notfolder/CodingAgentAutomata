@@ -16,6 +16,11 @@ from shared.models.db import CLIAdapter
 # ロガーを設定
 logger = logging.getLogger(__name__)
 
+# opencode のモデル名が空のときに使う既定のモデル
+_DEFAULT_OPENCODE_MODEL = "openai/gpt-4o-mini"
+# Claude のモデルを表す opencode のプロバイダ
+_ANTHROPIC_PROVIDER = "anthropic"
+
 
 class CLIAdapterResolver:
     """
@@ -109,22 +114,17 @@ class CLIAdapterResolver:
         # config_content_env が設定されている場合は JSON 形式でまとめてセット（opencode 向け）
         if adapter.config_content_env:
             config_content: dict = {}
-            # LiteLLM ベースURLを opencode の provider.{provider_id}.options.baseURL 形式で設定
+            # LiteLLM ベースURLを opencode の provider.{provider_id}.options 形式で設定する。
             # opencode の設定スキーマではルートレベルに "baseURL" キーは使えないため、
             # provider セクションにネストして渡す必要がある
             if info.get("llm_base_url"):
-                # model 値（例: "openai/gpt-4o"）の "/" 前部分をプロバイダーIDとして使用
-                model_str: str = info.get("model", "openai/gpt-4o-mini")
-                provider_id: str = (
-                    model_str.split("/")[0] if "/" in model_str else "openai"
+                config_content.update(
+                    self.build_opencode_provider_config(
+                        info.get("model", ""),
+                        info["llm_base_url"],
+                        info.get("llm_api_key"),
+                    )
                 )
-                config_content["provider"] = {
-                    provider_id: {
-                        "options": {
-                            "baseURL": info["llm_base_url"],
-                        }
-                    }
-                }
             # MCP 設定を opencode の "mcp" キーで設定
             # opencode ではルートレベルに "mcpServers" キーは使えず "mcp" を使う
             if info.get("mcp_config"):
@@ -157,6 +157,64 @@ class CLIAdapterResolver:
             list(env_vars.keys()),
         )
         return env_vars
+
+    @staticmethod
+    def split_opencode_model(model: str) -> tuple[str, str]:
+        """
+        opencode のモデル名をプロバイダとモデルに分ける。
+
+        モデル名は「プロバイダ/モデル」の形（例: "anthropic/claude-opus-5-5"）。
+        最初の "/" で分け、"/" が無い名前はプロバイダを "openai" とみなす。
+        空のモデル名は既定の "openai/gpt-4o-mini" として扱う。
+
+        Args:
+            model: opencode に渡すモデル名
+
+        Returns:
+            tuple[str, str]: (プロバイダ, モデル)
+        """
+        model_str: str = model or _DEFAULT_OPENCODE_MODEL
+        if "/" in model_str:
+            provider_id, model_id = model_str.split("/", 1)
+            return provider_id, model_id
+        return "openai", model_str
+
+    @staticmethod
+    def build_opencode_provider_config(
+        model: str,
+        llm_base_url: str,
+        llm_api_key: Optional[str],
+    ) -> dict:
+        """
+        opencode の設定 JSON のうち、provider と small_model の部分を組み立てる。
+
+        プロバイダが "anthropic" の場合は、LiteLLM Proxy の Anthropic 形式の入口を
+        使うため URL の末尾に "/v1" を付け、Virtual Key を apiKey に入れ、
+        タイトル用のモデル（small_model）に指定のモデル名をそのまま使う。
+        それ以外のプロバイダでは、URL だけを baseURL に入れる（従来どおり）。
+
+        Args:
+            model: opencode に渡すモデル名（例: "anthropic/claude-opus-5-5"）
+            llm_base_url: LiteLLM Proxy のベース URL
+            llm_api_key: 利用者の Virtual Key（無ければ None）
+
+        Returns:
+            dict: {"provider": {...}} と、anthropic の場合は "small_model" を含む辞書
+        """
+        provider_id, _ = CLIAdapterResolver.split_opencode_model(model)
+        if provider_id != _ANTHROPIC_PROVIDER:
+            return {"provider": {provider_id: {"options": {"baseURL": llm_base_url}}}}
+
+        base_url: str = llm_base_url.rstrip("/")
+        if not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
+        options: dict = {"baseURL": base_url}
+        if llm_api_key:
+            options["apiKey"] = llm_api_key
+        return {
+            "provider": {_ANTHROPIC_PROVIDER: {"options": options}},
+            "small_model": model,
+        }
 
     def build_start_command(
         self,
