@@ -111,3 +111,16 @@ opencode は 1 回の実行で、タイトル用のモデルの呼び出しと�
 - 実 LLM モード: `./scripts/test_setup.sh --real --run-tests`。LiteLLM Proxy（`litellm/config-real.yml`）が本物の Anthropic に転送する。手動での実行だけを必須にする。Anthropic の API キーだけで、opencode で Claude のモデルを指定したシナリオを流せる。
 - 切り替えは、テスト環境の構築のコマンドの `--real` で行う（docker compose のプロファイル `test` と `test-real` が切り替わる）。Zscaler の模擬プロキシ（`--zscaler-mock`）とも組み合わせられる。
 - モックはシンボリックリンク（`external/litellm/mock/`）で参照し、リンクも git で管理する。テスト環境を作るスクリプトは既存の bash と Python のまま。
+
+## 追補（2026-11-03）: 本番のモデル名（プロバイダ名なし）
+
+入力: `.history/20261103-opencode-model-name-rule/change_requirements.md`
+
+| 確かめたこと | 結果 | 確かめ方 |
+|---|---|---|
+| 本番の LiteLLM Proxy のモデル名 | プロバイダ名が付かない。Claude のモデル名はすべて `claude-` で始まる | ユーザーへの確認（2026-11-03） |
+| opencode に `/` の無い名前を渡したとき | `ProviderModelNotFoundError: Model not found: gpt-4o-mini/.`。opencode は `/` の無い名前をプロバイダ名と読む。Claude の名前でも同じ | テスト環境の LiteLLM Proxy（モック）に向けて opencode 1.19.5 で実行 |
+| opencode に「プロバイダ/モデル」の形で渡したとき | `anthropic/claude-…` は Anthropic の形式、`openai/…` は OpenAI の形式で呼び、LiteLLM Proxy には `/` の後ろのモデル名が届く | 2026-11-02 の調査（本物とモック） |
+| テスト環境の LiteLLM Proxy のモデル名 | モック用・本物用のどちらの設定にも、プロバイダ名の無い `claude-haiku-4-5-20251001`・`claude-opus-5-5`・`gpt-4o-mini` などがある | `litellm/config.yml`・`config-real.yml` |
+
+このため、本システムは opencode に渡す前に、モデル名を常に「プロバイダ/モデル」の形にする必要がある。LiteLLM Proxy に届く名前は `/` の後ろなので、本番の名前（プロバイダ名なし）と一致する。

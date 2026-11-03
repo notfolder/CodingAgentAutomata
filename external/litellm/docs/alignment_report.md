@@ -49,3 +49,10 @@
 - Virtual Key は opencode に渡す設定の JSON の中で渡し、CLI アダプタ設定は変えない。
 - タイトル用のモデルには、本体と同じモデルを指定する。
 - モック LLM モードの LiteLLM Proxy の設定で、モック LLM が応じない設定項目を捨てる。
+
+## 追補（2026-11-03）: 本番のモデル名（プロバイダ名なし）への対応
+
+- 入力: `.history/20261103-opencode-model-name-rule/change_requirements.md`、`external/litellm/docs/research.md` の追補
+- 一致している要件: opencode のプロバイダの判定（本番のモデル名を含む）。`/` の無い名前からプロバイダを決め、opencode には「プロバイダ/モデル」の形で、LiteLLM Proxy にはモデルの部分を渡す決まりは、opencode と LiteLLM Proxy の仕様に合う。opencode で、プロバイダ名の付かない Claude のモデル名を指定する MR 処理のシナリオは、テスト環境の LiteLLM Proxy にプロバイダ名の無い Claude の名前（`claude-haiku-4-5-20251001` など）があるので、モックと本物の両方で流せる
+- 不整合: 無い（不足・矛盾・過剰なし）
+- 設計に進めるかの判定: **進める**

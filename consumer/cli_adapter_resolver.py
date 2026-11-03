@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 _DEFAULT_OPENCODE_MODEL = "openai/gpt-4o-mini"
 # Claude のモデルを表す opencode のプロバイダ
 _ANTHROPIC_PROVIDER = "anthropic"
+# プロバイダ名の付かない Claude のモデル名の先頭（本番の LiteLLM Proxy の名前）
+_CLAUDE_MODEL_PREFIX = "claude-"
 
 
 class CLIAdapterResolver:
@@ -163,12 +165,13 @@ class CLIAdapterResolver:
         """
         opencode のモデル名をプロバイダとモデルに分ける。
 
-        モデル名は「プロバイダ/モデル」の形（例: "anthropic/claude-opus-5-5"）。
-        最初の "/" で分け、"/" が無い名前はプロバイダを "openai" とみなす。
+        "/" があれば最初の "/" で分ける（例: "anthropic/claude-opus-5-5"）。
+        "/" が無い名前（本番の LiteLLM Proxy のモデル名）は、"claude-" で始まれば
+        プロバイダを "anthropic"、それ以外は "openai" とし、モデルは名前全体とする。
         空のモデル名は既定の "openai/gpt-4o-mini" として扱う。
 
         Args:
-            model: opencode に渡すモデル名
+            model: 利用者が書いたモデル名
 
         Returns:
             tuple[str, str]: (プロバイダ, モデル)
@@ -177,7 +180,26 @@ class CLIAdapterResolver:
         if "/" in model_str:
             provider_id, model_id = model_str.split("/", 1)
             return provider_id, model_id
+        if model_str.startswith(_CLAUDE_MODEL_PREFIX):
+            return _ANTHROPIC_PROVIDER, model_str
         return "openai", model_str
+
+    @staticmethod
+    def qualify_opencode_model(model: str) -> str:
+        """
+        opencode に渡すモデル名を「プロバイダ/モデル」の形にする。
+
+        opencode は "/" の無い名前をプロバイダ名と読んで失敗するため、
+        split_opencode_model で決めたプロバイダを付けてつなぐ。
+
+        Args:
+            model: 利用者が書いたモデル名
+
+        Returns:
+            str: 「プロバイダ/モデル」の形のモデル名
+        """
+        provider_id, model_id = CLIAdapterResolver.split_opencode_model(model)
+        return f"{provider_id}/{model_id}"
 
     @staticmethod
     def build_opencode_provider_config(
@@ -190,11 +212,11 @@ class CLIAdapterResolver:
 
         プロバイダが "anthropic" の場合は、LiteLLM Proxy の Anthropic 形式の入口を
         使うため URL の末尾に "/v1" を付け、Virtual Key を apiKey に入れ、
-        タイトル用のモデル（small_model）に指定のモデル名をそのまま使う。
+        タイトル用のモデル（small_model）に「プロバイダ/モデル」の形のモデル名を使う。
         それ以外のプロバイダでは、URL だけを baseURL に入れる（従来どおり）。
 
         Args:
-            model: opencode に渡すモデル名（例: "anthropic/claude-opus-5-5"）
+            model: 利用者が書いたモデル名（例: "claude-opus-5-5"、"anthropic/claude-opus-5-5"）
             llm_base_url: LiteLLM Proxy のベース URL
             llm_api_key: 利用者の Virtual Key（無ければ None）
 
@@ -213,7 +235,7 @@ class CLIAdapterResolver:
             options["apiKey"] = llm_api_key
         return {
             "provider": {_ANTHROPIC_PROVIDER: {"options": options}},
-            "small_model": model,
+            "small_model": CLIAdapterResolver.qualify_opencode_model(model),
         }
 
     def build_start_command(
@@ -255,6 +277,10 @@ class CLIAdapterResolver:
             # プレースホルダーが残っている場合は削除
             command = command.replace("{mcp_config}", "")
 
+        # opencode は「プロバイダ/モデル」の形でしかモデルを受け付けないため、
+        # 設定の JSON を渡すアダプタ（opencode）ではプロバイダを付けた名前を入れる
+        if adapter.config_content_env:
+            model = self.qualify_opencode_model(model)
         command = command.replace("{model}", model)
 
         logger.debug(
