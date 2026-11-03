@@ -177,7 +177,7 @@
 | `DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.resolve` | 関数 |
 | `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.split_opencode_model` | 関数 |
 | `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.qualify_opencode_model` | 関数 |
-| `DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.build_opencode_provider_config` | 関数 |
+| `DS-FN-BUILD-OPENCODE-CONFIG` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.build_opencode_provider_config` | 関数 |
 | `DS-CL-CLI-CONTAINER-MANAGER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py::CLIContainerManager` | クラス |
 | `DS-FN-RUN-CLI-CONTAINER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py::CLIContainerManager.configure_git` | 関数 |
 | `DS-FN-RUN-CLI-CONTAINER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py::CLIContainerManager.exec_command` | 関数 |
@@ -302,7 +302,9 @@
 | `DS-FN-CHECK-TRACE-MAP-FT-CHECK-TRACEABILITY` | `scripts/isdd/trace_map_checker.py::extract_regex` | 関数 |
 | `DS-FN-CHECK-TRACE-MAP-FT-CHECK-TRACEABILITY` | `scripts/isdd/trace_map_checker.py::main` | 関数 |
 | `DS-FN-CHECK-TRACE-MAP-FT-CHECK-TRACEABILITY` | `scripts/isdd/trace_map_checker.py::parse_design` | 関数 |
+| `DS-FN-CHECK-TRACE-MAP-FT-CHECK-TRACEABILITY` | `scripts/isdd/trace_map_checker.py::parse_change_design` | 関数 |
 | `DS-FN-CHECK-TRACE-MAP-FT-CHECK-TRACEABILITY` | `scripts/isdd/trace_map_checker.py::parse_trace_map` | 関数 |
+| `DS-FN-CHECK-TRACE-MAP-FT-CHECK-TRACEABILITY` | `scripts/isdd/trace_map_checker.py::resolve_active_change` | 関数 |
 | `DS-FN-SETUP-INITIAL-DATA-FT-SETUP-INITIAL-DATA` | `scripts/setup.py::main` | 関数 |
 | `DS-FN-SETUP-INITIAL-DATA-FT-SETUP-INITIAL-DATA` | `scripts/setup.py::setup` | 関数 |
 | `DS-CL-SETTINGS-UI-ENV-SETTINGS` | `shared/config/config.py::Settings` | クラス |

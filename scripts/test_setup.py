@@ -25,7 +25,8 @@ docker compose --profile test で起動した GitLab CE を含む全環境のセ
     GITLAB_ADMIN_TOKEN=glpat-xxxx python scripts/test_setup.py
 
 環境変数:
-    GITLAB_API_URL        GitLab の URL（デフォルト: http://localhost:8929）
+    GITLAB_API_URL        ホストから見た GitLab の URL（デフォルト: http://localhost:8929）
+    GITLAB_CONTAINER_URL  コンテナから見た GitLab の URL。.env.test に書く（デフォルト: http://gitlab:8929）
     GITLAB_ADMIN_TOKEN    GitLab 管理者 PAT（未設定の場合は docker exec で自動取得）
     GITLAB_CONTAINER      GitLab CE コンテナ名（デフォルト: codingagentautomata-gitlab-1）
     GITLAB_WEBHOOK_SECRET Webhook シークレット（デフォルト: test-webhook-secret）
@@ -54,6 +55,7 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------
 
 GITLAB_API_URL = os.environ.get("GITLAB_API_URL", "http://localhost:8929")
+GITLAB_CONTAINER_URL = os.environ.get("GITLAB_CONTAINER_URL", "http://gitlab:8929")
 GITLAB_ADMIN_TOKEN = os.environ.get("GITLAB_ADMIN_TOKEN", "")
 GITLAB_CONTAINER = os.environ.get("GITLAB_CONTAINER", "codingagentautomata-gitlab-1")
 GITLAB_WEBHOOK_SECRET = os.environ.get("GITLAB_WEBHOOK_SECRET", "test-webhook-secret")
@@ -617,7 +619,7 @@ def save_env_test(root_token: str, bot_pat: str, project_id: str, user_pats: dic
         logger.info("Mock LLM キーを検出: .env.test に LITELLM_PROXY_URL=http://mock_llm:4000 を設定します")
 
     content = f"""# E2E テスト用環境変数（scripts/test_setup.py が自動生成）
-GITLAB_API_URL={GITLAB_API_URL}
+GITLAB_API_URL={GITLAB_CONTAINER_URL}
 GITLAB_ADMIN_TOKEN={root_token}
 GITLAB_PAT={bot_pat}
 GITLAB_USER_TOKEN={user_token}

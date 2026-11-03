@@ -17,7 +17,7 @@
 | 9 | F-3 と F-4 で MCP 設定の形が違う（F-4 は `mcpServers` で包まないため、opencode に MCP 設定が渡らない） | `consumer/issue_to_mr_converter.py`、`consumer/mr_processor.py` |
 | 10 | Virtual Key の検証を、ユーザーの作成時には行わない（更新時だけ行う）。LiteLLM に接続できないときは有効とみなして保存する | `backend/services/user_service.py`、`backend/services/model_candidate_service.py` |
 | 11 | タスクを持つユーザーの削除と、タスクから参照されている CLI アダプタの削除で、DB の参照の扱いが決まっていない（500 になるか、履歴の CLI 情報が消えると推測） | `shared/models/db.py`、`backend/services/*` |
-| 12 | producer と consumer の `GITLAB_API_URL` が compose で `http://gitlab:8929` に固定され、本番の外部の GitLab を `.env` で指定しても効かない | `docker-compose.yml` |
+| 12 | （2026-11-03 に解消。`.history/20261103-gitlab-url-and-opencode-small-model/`）producer と consumer の `GITLAB_API_URL` が compose で `http://gitlab:8929` に固定され、本番の外部の GitLab を `.env` で指定しても効かない | `docker-compose.yml` |
 | 13 | RabbitMQ への投入に失敗すると、tasks に pending の行が残り、その Issue／MR が二度と投入されない。壊れたメッセージは再配信され続ける | `producer/gitlab_event_handler.py`、`shared/messaging/rabbitmq_client.py` |
 | 14 | 一部の E2E が名前どおりの内容を確かめていない（TTY 検知、Webhook の重複抑止など）。システムの F-4 テンプレートを上書きして後に残すテストがある | `e2e/tests/*.spec.ts` |
 | 15 | 小さな不整合: F-3 のブランチの作成元が `main` 固定、F-3 の失敗でトリガーラベルが戻らない、F-3 は Task に CLI とモデルを記録しない、no-op 判定が英語の定型句 3 種に依存、F-4 のタイムアウトとアサイン解除でエラーコメントが 2 件出る、トークンの比較が定数時間の比較でない、一般ユーザーが CLI アダプタ一覧を取れない、管理者が他人や自分のパスワードを再設定できない、`/users/new` と同じ名前のユーザーの詳細画面に行けない、README と compose の記述のずれ | 各ファイル |
@@ -27,5 +27,4 @@
 
 - OrbStack のマシンでは、コンテナで Playwright のブラウザを取得した直後の数十秒、外への最初の接続が詰まる（ERR_SOCKET_NOT_CONNECTED など）。公式の Playwright イメージでも同じ。CLI のエージェントが対象リポジトリのテストで同じ目に遭うかもしれない（追加 2026-11-02）
 - 管理画面のユーザー作成は bcrypt（コスト 12）でパスワードをハッシュにするため、CLI コンテナなどが CPU を使っていると数秒かかる（追加 2026-11-02）
-- opencode の OpenAI の経路では、タイトル用のモデル（`gpt-5.4-nano-flex`）が LiteLLM に無く、毎回 400 になってから opencode が別のモデルで呼び直している。処理は完了する。直すなら、Claude の経路と同じく `small_model` に本体のモデルを指定する（追加 2026-11-02、詳細: `external/litellm/docs/research.md`）
 - テスト環境の構築（`test_setup.py`）は、すでにいるテストユーザーのデフォルトモデルを `.env` の値に書き換えない（登録が 409 になると飛ばす）。`.env` のモデルを変えても、T-13・T-33・T-34 がユーザーを書き換えるまでは古いモデルで流れる（追加 2026-11-03）

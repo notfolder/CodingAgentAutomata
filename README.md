@@ -204,7 +204,7 @@ cp .env.example .env
 | 変数名 | 説明 |
 |---|---|
 | `GITLAB_PAT` | GitLab bot アカウントの Personal Access Token |
-| `GITLAB_API_URL` | GitLab の API URL（例: `http://gitlab:80`） |
+| `GITLAB_API_URL` | GitLab の URL。本番は社内の GitLab の URL を書く。テスト環境では、テスト環境の構築が `.env.test` に書くコンテナから見た URL（`http://gitlab:8929`）が優先される |
 | `GITLAB_BOT_NAME` | bot アカウントのユーザー名 |
 | `DATABASE_URL` | PostgreSQL 接続文字列 |
 | `RABBITMQ_URL` | RabbitMQ AMQP 接続 URL |
@@ -212,6 +212,13 @@ cp .env.example .env
 | `JWT_SECRET_KEY` | JWT 署名鍵 |
 | `GITLAB_WEBHOOK_SECRET` | Webhook 受信トークン |
 | `GITLAB_PROJECT_IDS` | ポーリング対象 GitLab プロジェクト ID（カンマ区切り） |
+
+### GitLab の URL についての更新の注意
+
+以前の版は `docker-compose.yml` で producer と consumer の `GITLAB_API_URL` を `http://gitlab:8929` に固定していたため、`.env` の値が効きませんでした。今の版は `.env` の値を使います。
+
+- 本番で `docker-compose.yml` の `GITLAB_API_URL` を手で直していた環境は、その手直しを戻し（更新で上書きしてかまいません）、`.env` の `GITLAB_API_URL` が社内の GitLab を指していることを確かめてください。
+- 手元のテスト環境は、`.env` を書き換えずに `./scripts/test_setup.sh` を実行し直してください。
 
 ### テスト環境追加変数
 

@@ -112,11 +112,20 @@ def test_anthropic_without_key_omits_api_key() -> None:
     assert "apiKey" not in config["provider"]["anthropic"]["options"]
 
 
-@pytest.mark.parametrize("model", ["openai/gpt-4o-mini", "gpt-5.5", ""])
-def test_openai_config_is_unchanged(model: str) -> None:
-    """OpenAI のモデルでは、従来どおり baseURL だけが入る。"""
+@pytest.mark.parametrize(
+    "model,small_model",
+    [("openai/gpt-4o-mini", "openai/gpt-4o-mini"), ("gpt-5.5", "openai/gpt-5.5"), ("", "openai/gpt-4o-mini")],
+)
+def test_openai_config_has_base_url_and_small_model(model: str, small_model: str) -> None:
+    """OpenAI のモデルでは、baseURL は URL のまま入り、small_model に本体のモデルが入る。"""
     config = CLIAdapterResolver.build_opencode_provider_config(model, _URL, _KEY)
-    assert config == {"provider": {"openai": {"options": {"baseURL": _URL}}}}
+    assert config == {"provider": {"openai": {"options": {"baseURL": _URL}}}, "small_model": small_model}
+
+
+def test_other_provider_config_has_small_model() -> None:
+    """openai・anthropic 以外のプロバイダでも、small_model に「プロバイダ/モデル」の名前が入る。"""
+    config = CLIAdapterResolver.build_opencode_provider_config("litellm/org/model", _URL, _KEY)
+    assert config == {"provider": {"litellm": {"options": {"baseURL": _URL}}}, "small_model": "litellm/org/model"}
 
 
 def test_build_env_vars_opencode_unprefixed_claude() -> None:
@@ -133,14 +142,17 @@ def test_build_env_vars_opencode_unprefixed_claude() -> None:
     assert content["mcp"] == {"gitlab": {"command": "x"}}
 
 
-def test_build_env_vars_opencode_openai_unchanged() -> None:
-    """opencode のアダプタで OpenAI のモデルなら、JSON は従来と同じになる。"""
+def test_build_env_vars_opencode_openai() -> None:
+    """opencode のアダプタで OpenAI のモデルなら、JSON に baseURL と本体のモデルの small_model が入る。"""
     env = _resolver().build_env_vars(
         _opencode_adapter(),
         {"llm_api_key": _KEY, "llm_base_url": _URL, "model": "gpt-5.5"},
     )
     assert env["OPENAI_API_KEY"] == _KEY
-    assert json.loads(env["OPENCODE_CONFIG_CONTENT"]) == {"provider": {"openai": {"options": {"baseURL": _URL}}}}
+    assert json.loads(env["OPENCODE_CONFIG_CONTENT"]) == {
+        "provider": {"openai": {"options": {"baseURL": _URL}}},
+        "small_model": "openai/gpt-5.5",
+    }
 
 
 def test_build_env_vars_claude_unchanged() -> None:

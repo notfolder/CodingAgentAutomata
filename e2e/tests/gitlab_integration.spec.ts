@@ -20,6 +20,7 @@
  *   T-33: Claude Code が docker-compose を使用できることを検証
  *   T-34: opencode が docker-compose を使用できることを検証
  *   T-35: opencode でプロバイダ名の付かない Claude のモデル名を指定した MR 処理が完了する
+ *   T-36: opencode でプロバイダ名の付かない Claude のモデル名を使う Issue→MR 変換が完了する
  *
  * 前提条件:
  *   - docker compose --profile test up -d で GitLab CE が起動済み
@@ -315,6 +316,35 @@ async function waitForFlakyTestBarrier(): Promise<void> {
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
   await waitForQueueDrain(adminToken, TASK_TIMEOUT_MS);
 }
+
+/**
+ * opencode のテストユーザーのデフォルト CLI を opencode に、デフォルトモデルを指定の名前にする。
+ * Issue→MR 変換はデフォルトモデルを使うため、通したい経路（OpenAI か Claude か）をテストごとに決める。
+ *
+ * @param adminToken 管理者の JWT
+ * @param model デフォルトモデルにする名前
+ * @returns 変える前のデフォルトモデル
+ */
+async function setOpencodeUserModel(adminToken: string, model: string): Promise<string> {
+  const getResp = await fetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  expect(getResp.status).toBe(200);
+  const previous = ((await getResp.json()) as { default_model: string }).default_model;
+  const putResp = await fetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ default_cli: 'opencode', default_model: model }),
+  });
+  expect(putResp.status).toBe(200);
+  return previous;
+}
+
+/** opencode の OpenAI の経路で使う、テスト環境の既定のモデル名 */
+const OPENCODE_OPENAI_MODEL = process.env.DEFAULT_OPENAI_MODEL_LITELLM || 'openai/gpt-4o-mini';
 
 // -----------------------------------------------------------------------
 // テスト前提条件チェック
@@ -762,6 +792,8 @@ test('T-31: testuser-opencodeのIssueをopencode CLIでMR変換できる', async
   const issueTitle = `[E2E T-31] opencode MR変換テスト ${issueSuffix}`;
 
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  // OpenAI の経路で Issue→MR 変換を通す（前の実行が残したデフォルトモデルに左右されないようにする）
+  await setOpencodeUserModel(adminToken, OPENCODE_OPENAI_MODEL);
 
   // 前のテスト（T-28/T-30）の CLI タスク（F-4）がコンシューマーキューに残っている場合、
   // T-31 の F-3 タスクが TASK_TIMEOUT_MS 以内に処理されず失敗する。
@@ -798,6 +830,8 @@ test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () =
   await waitForFlakyTestBarrier();
   const projectId = GITLAB_PROJECT_ID;
   const issueSuffix = Date.now();
+  // OpenAI の経路で Issue→MR 変換と MR 処理を通す
+  await setOpencodeUserModel(await backendLogin('admin', ADMIN_PASSWORD), OPENCODE_OPENAI_MODEL);
 
   // このテスト開始時刻以降に作成された MR のみを対象にする（stale MR 誤検知防止）
   const testStartTime = Date.now();
@@ -908,6 +942,46 @@ test('T-35: opencodeでプロバイダ名の付かないClaudeのモデル名を
   expect(recorded).toBe(true);
 });
 
+// -----------------------------------------------------------------------
+// T-36: opencode でプロバイダ名の付かない Claude のモデル名を使う Issue→MR 変換が完了する
+// -----------------------------------------------------------------------
+
+test('T-36: opencodeでプロバイダ名の付かないClaudeのモデル名を使うIssue→MR変換が完了する', async () => {
+  const projectId = GITLAB_PROJECT_ID;
+  const issueSuffix = Date.now();
+  // 本番の LiteLLM Proxy と同じく、プロバイダ名（anthropic/）を付けない名前を使う
+  const claudeModel = process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
+
+  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  await waitForQueueDrain(adminToken, TASK_TIMEOUT_MS);
+
+  // Issue→MR 変換はデフォルトモデルを使うので、テストの間だけ Claude のモデルにする
+  const previousModel = await setOpencodeUserModel(adminToken, claudeModel);
+  try {
+    const issue = await createIssue(
+      projectId, GITLAB_USER_TOKEN_OPENCODE,
+      `[E2E T-36] opencode Claude MR変換テスト ${issueSuffix}`,
+      ISSUE_FILE_TASK_DESCRIPTION
+    );
+    await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+    // タスクが完了する（Issue→MR 変換のタスクには CLI とモデルが記録されないため、状態だけを見る）
+    const completed = await waitForTaskStatus(
+      adminToken, projectId, String(issue.iid), 'completed', TASK_TIMEOUT_MS
+    );
+    expect(completed).toBe(true);
+
+    // Issue に MR 作成のコメントが付いている
+    const commented = await waitForComment(
+      projectId, 'issues', issue.iid, GITLAB_ADMIN_TOKEN, 'MR', TASK_TIMEOUT_MS
+    );
+    expect(commented).toBe(true);
+  } finally {
+    // 後のテストに Claude のモデルを残さない
+    await setOpencodeUserModel(adminToken, previousModel);
+  }
+});
+
 test('T-33: Claude Code が docker-compose を使用できることを検証', async () => {
   // モック LLM は実際にファイルを作らず docker compose も動かさないため、実 LLM のモードでだけ確かめる
   test.skip(process.env.LLM_MODE !== 'real', '実 LLM のモードでだけ確かめる');
@@ -986,18 +1060,7 @@ test('T-34: opencode が docker-compose を使用できることを検証', asyn
 
   // T-34 は必ず opencode 経路で実行する
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
-  const ensureOpenCodeResp = await fetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${adminToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      default_cli: 'opencode',
-      default_model: process.env.DEFAULT_OPENAI_MODEL_LITELLM || 'openai/gpt-4o-mini',
-    }),
-  });
-  expect(ensureOpenCodeResp.status).toBe(200);
+  await setOpencodeUserModel(adminToken, OPENCODE_OPENAI_MODEL);
 
   // このテスト開始時刻以降に作成された MR のみを対象にする
   const testStartTime = Date.now();

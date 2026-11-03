@@ -2,8 +2,9 @@
 
 ## 本番の GitLab の URL と opencode のタイトル用のモデル
 
-- [ ] 変更要件（`.history/20261103-gitlab-url-and-opencode-small-model/change_requirements.md`）を確定し、設計・実装する（追加 2026-11-03、重要 高）
-  - 起動の構成が GitLab の URL をテスト用に固定している問題（IDEAS の候補 12）と、opencode の OpenAI の経路のタイトル用のモデルの 400 を直す。ブランチ `feature/gitlab-url-and-opencode-small-model`
+- [ ] 実装と正本への反映が済んだ変更（ブランチ `feature/gitlab-url-and-opencode-small-model`）を PR にしてレビューし、main へ取り込む（追加 2026-11-03、重要 高）
+  - 起動の構成が GitLab の URL をテスト用に固定している問題（IDEAS の候補 12）と、opencode の OpenAI の経路のタイトル用のモデルの 400 を直した。Zscaler 設定を無効・模擬プロキシありの両方で E2E 全件通過
+  - 取り込む前に、本番の運用者へ compose の `GITLAB_API_URL` の手直しを戻すよう知らせる（README の「GitLab の URL についての更新の注意」）
 
 ## opencode で Claude のモデルを使えるようにする
 概要: .history/2026-11-03-1405-opencodeでClaudeモデル/summary.md
