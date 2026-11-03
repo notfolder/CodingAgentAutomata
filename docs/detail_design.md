@@ -483,13 +483,15 @@ stateDiagram-v2
 
 外部 DB との連携は無い。
 
-opencode のモデル名（デフォルトモデルの欄と、MR の説明文のエージェント指定 `agent: cli=opencode model=anthropic/claude-opus-5-5` の形）は、業務ルール「opencode のプロバイダの判定」に従って次のように扱う。
+opencode のモデル名（デフォルトモデルの欄と、MR の説明文のエージェント指定 `agent: cli=opencode model=claude-opus-5-5` の形）は、業務ルール「opencode のプロバイダの判定」に従って次のように扱う。
 
-| 入力 | 判定 | 結果 |
-|---|---|---|
-| `anthropic/<モデル>` | Claude のモデル | LiteLLM Proxy 経由で Claude のモデルを Anthropic の形式で呼ぶ |
-| `openai/<モデル>`、または `/` を含まないモデル名 | OpenAI のモデル | OpenAI の形式で呼ぶ |
-| それ以外のプロバイダ、または LiteLLM Proxy に無いモデル | 判定はしない | opencode が失敗し、CLI の失敗と同じく、タスクを失敗にしてコメントする |
+| 利用者が書いた名前 | プロバイダ | opencode に渡す名前 | LiteLLM Proxy に届く名前 |
+|---|---|---|---|
+| `claude-opus-5-5`（`/` なし、`claude-` で始まる） | `anthropic`（Anthropic の形式で呼ぶ） | `anthropic/claude-opus-5-5` | `claude-opus-5-5` |
+| `gpt-5.5`（`/` なし、それ以外） | `openai`（OpenAI の形式で呼ぶ） | `openai/gpt-5.5` | `gpt-5.5` |
+| `anthropic/claude-opus-5-5`、`openai/gpt-4o-mini`（`/` あり） | `/` の前 | 書いたまま | `/` の後ろ |
+| 空 | `openai` | `openai/gpt-4o-mini`（既定） | `gpt-4o-mini` |
+| `openai`・`anthropic` 以外のプロバイダ、または LiteLLM Proxy に無いモデル | 判定どおり | 判定どおり | – （opencode が失敗し、CLI の失敗と同じく、タスクを失敗にしてコメントする） |
 
 本システムのコードは LiteLLM Proxy を CLI の代わりに呼ばないので、連携ライブラリ（`external/litellm/src/`）は置かない（ユーザーの決定 2026-11-02。調査は `external/litellm/docs/research.md`）。モックへの切り替えは、LiteLLM Proxy の転送先をモック LLM にすることで行う。
 
@@ -706,9 +708,9 @@ SOLID 原則への適合状況:
 | `DS-FN-PROCESS-MR-FT-PROCESS-MR` | MR 処理 | 4-2-3 の手順 | `MRProcessor.process` | `RQ-FT-PROCESS-MR`、`RQ-FT-OVERRIDE-CLI-MODEL`、`RQ-FT-MONITOR-BOT-ASSIGNMENT`、`RQ-FT-ENFORCE-CLI-TIMEOUT`、`RQ-FT-JUDGE-MR-COMPLETION`、`RQ-FT-DETERMINE-TASK-USER`、`RQ-FT-REJECT-UNREGISTERED-USER`、`RQ-FT-TRANSITION-LABELS`、`RQ-FT-BUILD-MCP-CONFIG`、`RQ-FT-PROTECT-GITLAB-PAT`、`RQ-FT-PREVENT-DUPLICATE-TASK`、`RQ-DT-TASK-PENDING-TO-RUNNING`、`RQ-DT-TASK-RUNNING-TO-COMPLETED`、`RQ-DT-TASK-RUNNING-TO-FAILED`、`RQ-UI-GITLAB-COMMENTS` |
 | `DS-FN-RUN-CLI-CONTAINER-FT-RUN-CLI-CONTAINER` | CLI コンテナの実行 | 同じ名前の残骸を消し、特権・自動削除・consumer と同じネットワークで単発のコンテナを作り、プロンプトと起動コマンドのファイルを書き込み、起動前に出力のストリームを取ってから起動する。終了を待ち（Docker の時間切れはタイムアウトとして扱う）、止めて消す。起動時は各イメージで `echo warmup` を 1 回動かす。常駐のコンテナを起動してコマンドを実行する処理と、git の設定を書く処理も残っている（どこからも使われていない） | `CLIContainerManager.configure_git`、`CLIContainerManager.exec_command`、`CLIContainerManager.get_stdout_stream`、`CLIContainerManager.run_container_once`、`CLIContainerManager.start_container`、`CLIContainerManager.stop_container`、`CLIContainerManager.wait_container_exit`、`CLIContainerManager.write_file` | `RQ-FT-RUN-CLI-CONTAINER`、`RQ-FT-ENFORCE-CLI-TIMEOUT`、`RQ-NF-CLI-START-3MIN` |
 | `DS-FN-CONTROL-CLI-PROCESS-FT-DETECT-TTY-WAIT` | CLI の処理の強制終了 | CLI コンテナの中の CLI の処理番号を調べて止める（TTY 入力待機検知のための部品で、どこからも使われていない） | `CLIContainerManager.get_container_pid`、`CLIContainerManager.kill_process` | `RQ-FT-DETECT-TTY-WAIT` |
-| `DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER` | CLI アダプタの解決 | CLI ID からアダプタ設定を取り、`env_mappings` で環境変数を、`config_content_env` があれば opencode 用の JSON（プロバイダの部分は opencode のプロバイダの設定の組み立てで作り、`mcp` を加える）を、`start_command_template` の `{model}` と `{mcp_config}` を展開して起動コマンドを作る。全アダプタのイメージの一覧も返す | `CLIAdapterResolver.build_env_vars`、`CLIAdapterResolver.build_start_command`、`CLIAdapterResolver.fetch_all_container_images`、`CLIAdapterResolver.resolve` | `RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-BUILD-MCP-CONFIG` |
-| `DS-FN-DETERMINE-OPENCODE-PROVIDER-FT-DETERMINE-OPENCODE-PROVIDER` | opencode のプロバイダの判定 | モデル名を最初の `/` で分け、前をプロバイダ、後ろをモデルとする。`/` が無ければプロバイダは `openai`、モデルは名前全体とする。モデル名が空なら既定 `openai/gpt-4o-mini` を使う | `CLIAdapterResolver.split_opencode_model` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER` |
-| `DS-FN-BUILD-OPENCODE-PROVIDER-CONFIG-FT-CALL-CLAUDE-VIA-OPENCODE` | opencode のプロバイダの設定の組み立て | モデル名、LiteLLM Proxy の URL、Virtual Key から、opencode 用の JSON のうち `provider` と `small_model` を作る。プロバイダが `anthropic` なら、URL の末尾の `/` を取り除いて `/v1` を付け（すでに `/v1` で終わっていれば付けない）、`provider.anthropic.options` に `baseURL` と `apiKey`（Virtual Key。空なら入れない）を入れ、`small_model` に指定のモデル名を入れる。それ以外は `provider.<プロバイダ>.options.baseURL` に URL をそのまま入れ、`small_model` は入れない。CLI アダプタ設定は変えずに済む | `CLIAdapterResolver.build_opencode_provider_config` | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER` | CLI アダプタの解決 | CLI ID からアダプタ設定を取り、`env_mappings` で環境変数を、`config_content_env` があれば opencode 用の JSON（プロバイダの部分は opencode のプロバイダの設定の組み立てで作り、`mcp` を加える）を、`start_command_template` の `{model}` と `{mcp_config}` を展開して起動コマンドを作る（opencode のアダプタでは、`{model}` に opencode のプロバイダの判定でつないだ「プロバイダ/モデル」の名前を入れる）。全アダプタのイメージの一覧も返す | `CLIAdapterResolver.build_env_vars`、`CLIAdapterResolver.build_start_command`、`CLIAdapterResolver.fetch_all_container_images`、`CLIAdapterResolver.resolve` | `RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-BUILD-MCP-CONFIG` |
+| `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | opencode のプロバイダの判定 | モデル名を分ける: 空なら既定の `openai/gpt-4o-mini` を使う。最初の `/` があれば、前をプロバイダ、後ろをモデルとする。無ければ、名前が `claude-` で始まるときはプロバイダ `anthropic`、それ以外は `openai` とし、モデルは名前全体とする。つなぐ: 分けた結果を「プロバイダ/モデル」の 1 つの名前にする。起動コマンドの組み立ては、アダプタに設定の JSON を渡す環境変数があるとき（opencode のとき）だけ、`{model}` につないだ名前を入れる | `CLIAdapterResolver.split_opencode_model`、`CLIAdapterResolver.qualify_opencode_model` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
+| `DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | opencode のプロバイダの設定の組み立て | モデル名、LiteLLM Proxy の URL、Virtual Key から、opencode 用の JSON のうち `provider` と `small_model` を作る。プロバイダは opencode のプロバイダの判定で決める。`anthropic` なら、URL の末尾の `/` を取り除いて `/v1` を付け（すでに `/v1` で終わっていれば付けない）、`provider.anthropic.options` に `baseURL` と `apiKey`（Virtual Key。空なら入れない）を入れ、`small_model` に「プロバイダ/モデル」の形の名前を入れる。それ以外は `provider.<プロバイダ>.options.baseURL` に URL をそのまま入れ、`small_model` は入れない。CLI アダプタ設定は変えずに済む | `CLIAdapterResolver.build_opencode_provider_config` | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
 | `DS-FN-BUILD-PROMPT-FT-BUILD-PROMPT` | プロンプトの生成 | F-3 は `{issue_title}`・`{issue_description}`・`{issue_comments}`・`{project_name}`・`{repository_url}`・`{existing_branches}`、F-4 は `{mr_description}`・`{mr_comments}`・`{branch_name}`・`{repository_url}` を展開する。F-4 はユーザー個別のテンプレートを優先し、テンプレートに無い必須の情報を末尾に補う | `PromptBuilder.build_f3_prompt`、`PromptBuilder.build_f4_prompt` | `RQ-FT-BUILD-PROMPT` |
 | `DS-FN-REPORT-PROGRESS-FT-REPORT-PROGRESS` | 進捗報告 | CLI の出力を 1 行ずつ溜め（stream-json は読める文に直す）、`PROGRESS_REPORT_INTERVAL_SEC` ごとに MR の 1 件のコメントを作成・更新する。直近 `PROGRESS_REPORT_SUMMARY_LINES` 行と全体のログ（最大 `PROGRESS_REPORT_BUFFER_MAX_LINES` 行）を出す。3 回続けて失敗したら更新をやめる | `ProgressManager.append_line`、`ProgressManager.decode_stream_json_line`、`ProgressManager.flush`、`ProgressManager.start`、`ProgressManager.stop` | `RQ-FT-REPORT-PROGRESS`、`RQ-UI-GITLAB-COMMENTS` |
 | `DS-FN-MASK-CLI-LOG-FT-MASK-CLI-LOG` | CLI ログのマスク | URL に埋め込まれたトークン（`oauth2:TOKEN@` と `TOKEN@`）を `****` に置き換える | `CLILogMasker.mask` | `RQ-FT-MASK-CLI-LOG`、`RQ-FT-PROTECT-GITLAB-PAT` |
@@ -987,7 +989,7 @@ Zscaler 環境対応で足すディレクトリ:
 | `DS-MD-BACKEND-TASK-SERVICE-FT-LIST-TASK-HISTORY` | `backend/services/task_service.py` | タスクの一覧 | `DS-CL-TASK-SERVICE-FT-LIST-TASK-HISTORY`、`DS-FN-LIST-TASKS-FT-LIST-TASK-HISTORY` | `RQ-FT-LIST-TASK-HISTORY` |
 | `DS-MD-BACKEND-USER-SERVICE-FT-MANAGE-USERS` | `backend/services/user_service.py` | ユーザー管理の業務ロジック | `DS-CL-USER-SERVICE-FT-MANAGE-USERS`、`DS-FN-MANAGE-USERS-FT-MANAGE-USERS` | `RQ-FT-MANAGE-USERS`、`RQ-FT-VALIDATE-USER-INPUT`、`RQ-FT-VALIDATE-LLM-KEY` |
 | `DS-MD-BACKEND-VIRTUAL-KEY-SERVICE-FT-ENCRYPT-VIRTUAL-KEY` | `backend/services/virtual_key_service.py` | Virtual Key の暗号化と復号 | `DS-CL-BACKEND-VIRTUAL-KEY-SERVICE-FT-ENCRYPT-VIRTUAL-KEY`、`DS-FN-CRYPT-VIRTUAL-KEY-FT-ENCRYPT-VIRTUAL-KEY` | `RQ-FT-ENCRYPT-VIRTUAL-KEY` |
-| `DS-MD-CONSUMER-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py` | CLI アダプタの解決 | `DS-CL-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-DETERMINE-OPENCODE-PROVIDER-FT-DETERMINE-OPENCODE-PROVIDER`、`DS-FN-BUILD-OPENCODE-PROVIDER-CONFIG-FT-CALL-CLAUDE-VIA-OPENCODE` | `RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-MD-CONSUMER-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py` | CLI アダプタの解決 | `DS-CL-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | `RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
 | `DS-MD-CONSUMER-CLI-CONTAINER-MANAGER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py` | CLI コンテナの管理 | `DS-CL-CLI-CONTAINER-MANAGER-FT-RUN-CLI-CONTAINER`、`DS-FN-CONTROL-CLI-PROCESS-FT-DETECT-TTY-WAIT`、`DS-FN-RUN-CLI-CONTAINER-FT-RUN-CLI-CONTAINER` | `RQ-FT-RUN-CLI-CONTAINER`、`RQ-FT-DETECT-TTY-WAIT`、`RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` |
 | `DS-MD-CONSUMER-CLI-LOG-MASKER-FT-MASK-CLI-LOG` | `consumer/cli_log_masker.py` | CLI ログのマスク | `DS-CL-CLI-LOG-MASKER-FT-MASK-CLI-LOG`、`DS-FN-MASK-CLI-LOG-FT-MASK-CLI-LOG` | `RQ-FT-MASK-CLI-LOG` |
 | `DS-MD-CONSUMER-ENTRY-FT-GRACEFUL-SHUTDOWN` | `consumer/consumer.py` | consumer の起動と停止 | `DS-CL-CONSUMER-WORKER-FT-GRACEFUL-SHUTDOWN`、`DS-FN-START-CONSUMER-FT-GRACEFUL-SHUTDOWN` | `RQ-FT-GRACEFUL-SHUTDOWN`、`RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` |
@@ -1055,7 +1057,7 @@ Zscaler 環境対応で足すディレクトリ:
 |---|---|
 | 設定・DB・GitLab・キューのクライアント、ORM モデル、停止の要求 | `shared/` |
 | CLI エージェントごとの違い | CLI アダプタ設定（DB）と CLIAdapterResolver |
-| opencode のモデル名の分割と、LiteLLM Proxy の URL への `/v1` の付加 | CLIAdapterResolver の 2 つの静的メソッド（分割は 1 か所。`/v1` は opencode の Anthropic の形式のときだけ付け、Claude Code 用の `ANTHROPIC_BASE_URL` には付けない） |
+| opencode のモデル名の判定・つなぎと、LiteLLM Proxy の URL への `/v1` の付加 | CLIAdapterResolver の静的メソッド（判定は `split_opencode_model`、つなぎは `qualify_opencode_model` の 1 か所ずつで、起動コマンドと設定の JSON の両方が使う。`/v1` は opencode の Anthropic の形式のときだけ付け、Claude Code 用の `ANTHROPIC_BASE_URL` には付けない） |
 | Virtual Key の暗号化と復号 | backend と consumer に同じ実装がある（共通化されていない） |
 
 Zscaler 環境対応の共通化:
@@ -1115,7 +1117,7 @@ Zscaler 環境対応の共通化:
 | `DS-TS-NO-TLS-VERIFY-DISABLE-NF-TLS-VERIFICATION-ALWAYS-ON` | 単体・結合テスト | リポジトリ全体（`node_modules`、仮想環境、`.history/`、`docs/`、このテスト自身を除く）に、6-2 の証明書の検証を無効にする設定が無いことを確かめる単体テスト | `RQ-NF-TLS-VERIFICATION-ALWAYS-ON` |
 | `DS-TS-NON-TARGET-EVENTS-E2E-TS-VERIFY-NON-TARGET-EVENTS` | `e2e/tests/gitlab_integration.spec.ts（T-10〜T-13）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-NON-TARGET-EVENTS` |
 | `DS-TS-OPENCODE-CLI-E2E-TS-VERIFY-OPENCODE-CLI` | `e2e/tests/gitlab_integration.spec.ts（T-31・T-32）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-OPENCODE-CLI` |
-| `DS-TS-OPENCODE-CLAUDE-MODEL-E2E-TS-VERIFY-OPENCODE-CLAUDE-MODEL` | `e2e/tests/gitlab_integration.spec.ts（T-35）` | 前提: `testuser-opencode` のデフォルト CLI を opencode にしておく。手順: 管理者の PAT で main から作業ブランチを作り、`testuser-opencode` の PAT でその Draft MR を作る。説明文は MR 処理用の作業指示に `agent: cli=opencode model=anthropic/<DEFAULT_CLAUDE_MODEL。既定 claude-haiku-4-5-20251001>` の行を足したもの。MR に bot をアサインし特定ラベルを付ける。期待結果: 完了コメントが付き、backend のタスクの一覧でその MR のタスクの CLI が `opencode`、モデルが指定の名前、状態が完了。モック LLM モードと実 LLM モードの両方で成功する。Issue→MR 変換を経ないのは、実 LLM モードで OpenAI の API キーを要らなくするため | `RQ-TS-VERIFY-OPENCODE-CLAUDE-MODEL`、`RQ-EX-USE-LOCAL-HTTP-MOCK` |
+| `DS-TS-OPENCODE-UNPREFIXED-CLAUDE-E2E-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL` | `e2e/tests/gitlab_integration.spec.ts（T-35）` | 前提: `testuser-opencode` のデフォルト CLI を opencode にしておく。手順: 管理者の PAT で main から作業ブランチを作り、`testuser-opencode` の PAT でその Draft MR を作る。説明文は MR 処理用の作業指示に `agent: cli=opencode model=<DEFAULT_CLAUDE_MODEL。既定 claude-haiku-4-5-20251001。プロバイダ名を付けない>` の行を足したもの。MR に bot をアサインし特定ラベルを付ける。期待結果: 完了コメントが付き、backend のタスクの一覧でその MR のタスクの CLI が `opencode`、モデルが書いたままの名前、状態が完了。モック LLM モードと実 LLM モードの両方で成功する。Issue→MR 変換を経ないのは、実 LLM モードで OpenAI の API キーを要らなくするため | `RQ-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL`、`RQ-EX-USE-LOCAL-HTTP-MOCK` |
 | `DS-TS-OS-BUNDLE-FALLBACK-TS-VERIFY-OS-BUNDLE-FALLBACK` | 証明書ファイルが無いときホストの OS の束を使う | 前提: 模擬プロキシが起動している。手順: 一時ディレクトリを `--project-dir` にし、証明書ファイルなし、`--host-bundle` に模擬の認証局を足した束を渡して、`ZSCALER_PROXY_URL=http://127.0.0.1:18080` で準備処理を実行する。期待結果: 終了コード 0、生成物の `extra-ca.pem` と `ca-bundle.pem` がその束と同じ内容 | `RQ-TS-VERIFY-OS-BUNDLE-FALLBACK` |
 | `DS-TS-PROMPT-TEMPLATES-E2E-TS-VERIFY-PROMPT-TEMPLATES` | `e2e/tests/prompt_templates.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-PROMPT-TEMPLATES` |
 | `DS-TS-REAL-LLM-E2E-VIA-MOCK-TS-VERIFY-REAL-LLM-E2E-VIA-MOCK` | 実際の LLM の F-3・F-4 が模擬経由で完了する | 前提: 実 LLM の API キーを `.env` に設定済み。手順: `./scripts/test_setup.sh --zscaler-mock --real --run-tests` を実行する。期待結果: 実 LLM モードの E2E がすべて成功し、LLM の API への通信が模擬プロキシのログに残る | `RQ-TS-VERIFY-REAL-LLM-E2E-VIA-MOCK` |
@@ -1128,7 +1130,7 @@ Zscaler 環境対応の共通化:
 | `DS-TS-WEBHOOK-RECEIVE-E2E-TS-VERIFY-WEBHOOK-RECEIVE` | `e2e/tests/group_webhook.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-WEBHOOK-RECEIVE`、`RQ-NF-WEBHOOK-ENQUEUE-3S` |
 | `DS-TS-ZSCALER-SCRIPT-TESTS-FT-REQUIRE-ZSCALER-SETTINGS` | 単体・結合テスト | 準備処理の単体・結合テスト（スイッチの値の判定、宛先の形、証明書の決め方、除外宛先、生成物の中身、エラー時に生成物を書き換えないこと） | `RQ-FT-REQUIRE-ZSCALER-SETTINGS`、`RQ-FT-RESOLVE-CERT-BUNDLE`、`RQ-FT-BUILD-NO-PROXY-LIST` |
 | `DS-TS-ZSCALER-UNIT-TESTS-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` | 単体・結合テスト | ZscalerSettings（有効・無効・値なし）、PromptBuilder（F-3、F-4 のシステム設定、F-4 のユーザー個別、無効時に足さない）、CLIContainerManager（環境変数の優先順位、追加のホスト名）の単体テスト | `RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER`、`RQ-FT-INSTRUCT-CLI-ZSCALER` |
-| `DS-TS-OPENCODE-PROVIDER-CONFIG-UNIT-FT-CALL-CLAUDE-VIA-OPENCODE` | 単体テスト | `tests/consumer/test_cli_adapter_resolver_opencode.py`。`anthropic/` のモデルで `/v1` 付きの `baseURL`・`apiKey`・`small_model` が入ること、URL の末尾の `/` や `/v1` で `/v1` が二重にならないこと、`openai/` と `/` の無い名前で既存と同じ JSON になること、空のモデル名で既定になること、`build_env_vars` が opencode のアダプタで JSON と `OPENAI_API_KEY` の両方を入れること、Claude Code のアダプタの出力が変わらないこと | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-TS-OPENCODE-MODEL-NAME-UNIT-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | 単体テスト | `tests/consumer/test_cli_adapter_resolver_opencode.py`。判定（`claude-opus-5-5`→`anthropic`、`gpt-5.5`→`openai`、`/` 付きは書いたまま、空→既定、`litellm/org/model`→最初の `/` で分ける）、つなぎ（各名前が「プロバイダ/モデル」になる）、起動コマンド（opencode では `--model` がつないだ名前、Claude Code は書いたまま）、設定の JSON（`/` の有無にかかわらず `anthropic` なら `/v1` 付きの `baseURL`・`apiKey`・つないだ `small_model`。`/v1` が二重にならない。`openai` では既存と同じ JSON）、`build_env_vars`（opencode で JSON と `OPENAI_API_KEY` の両方。Claude Code の出力は変わらない） | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
 
 外部連携のモードは、モック LLM を使う既定のモード（プロファイル test）と、実際の LLM を使う real のモード（プロファイル test-real）の 2 つ。CLI コンテナの中の docker compose のシナリオは real のモードだけで通る。
 
@@ -1553,12 +1555,12 @@ Zscaler 環境対応の障害対応:
 | `DS-TS-WEBHOOK-RECEIVE-E2E-TS-VERIFY-WEBHOOK-RECEIVE` | `RQ-TS-VERIFY-WEBHOOK-RECEIVE`、`RQ-NF-WEBHOOK-ENQUEUE-3S` |
 | `DS-TS-ZSCALER-SCRIPT-TESTS-FT-REQUIRE-ZSCALER-SETTINGS` | `RQ-FT-REQUIRE-ZSCALER-SETTINGS`、`RQ-FT-RESOLVE-CERT-BUNDLE`、`RQ-FT-BUILD-NO-PROXY-LIST` |
 | `DS-TS-ZSCALER-UNIT-TESTS-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` | `RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER`、`RQ-FT-INSTRUCT-CLI-ZSCALER` |
-| `DS-FN-DETERMINE-OPENCODE-PROVIDER-FT-DETERMINE-OPENCODE-PROVIDER` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER` |
-| `DS-FN-BUILD-OPENCODE-PROVIDER-CONFIG-FT-CALL-CLAUDE-VIA-OPENCODE` | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
+| `DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
 | `DS-OP-MOCK-LITELLM-DROP-PARAMS-EX-USE-LOCAL-HTTP-MOCK` | `RQ-EX-USE-LOCAL-HTTP-MOCK` |
 | `DS-OP-OPENCODE-CLAUDE-NO-MIGRATION-NF-OPENCODE-CLAUDE-NO-MIGRATION` | `RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
-| `DS-TS-OPENCODE-PROVIDER-CONFIG-UNIT-FT-CALL-CLAUDE-VIA-OPENCODE` | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
-| `DS-TS-OPENCODE-CLAUDE-MODEL-E2E-TS-VERIFY-OPENCODE-CLAUDE-MODEL` | `RQ-TS-VERIFY-OPENCODE-CLAUDE-MODEL`、`RQ-EX-USE-LOCAL-HTTP-MOCK` |
+| `DS-TS-OPENCODE-MODEL-NAME-UNIT-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-TS-OPENCODE-UNPREFIXED-CLAUDE-E2E-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL` | `RQ-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL`、`RQ-EX-USE-LOCAL-HTTP-MOCK` |
 
 ### 11-1. 除外要件
 
