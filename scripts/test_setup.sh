@@ -128,11 +128,13 @@ if [ "${REAL_LLM}" = "true" ]; then
     # もう片方のモードの LiteLLM サービスとその profile
     OTHER_PROFILE="test"
     OTHER_LITELLM_SERVICE="litellm"
+    LITELLM_SERVICE="litellm_real"
 else
     COMPOSE_PROFILE="test"
     PLAYWRIGHT_SERVICE="test_playwright"
     OTHER_PROFILE="test-real"
     OTHER_LITELLM_SERVICE="litellm_real"
+    LITELLM_SERVICE="litellm"
 fi
 
 # litellm と litellm_real は同じホストポート 4001 を使うため、
@@ -142,6 +144,12 @@ docker compose --profile "${OTHER_PROFILE}" stop "${OTHER_LITELLM_SERVICE}" >/de
 
 echo "[ステップ 1] サービスを起動します（profile: ${COMPOSE_PROFILE}）..."
 docker compose --profile "${COMPOSE_PROFILE}" up -d --build
+
+# LiteLLM の設定ファイルは 1 ファイルだけをコンテナに差し込んでいるため、
+# ファイルを置き換えても動いているコンテナは古い設定を読み続ける。
+# 設定の変更を必ず反映させるため、LiteLLM のコンテナは毎回作り直す
+echo "[ステップ 1] LiteLLM（${LITELLM_SERVICE}）を作り直して設定を読み込ませます..."
+docker compose --profile "${COMPOSE_PROFILE}" up -d --force-recreate --no-deps "${LITELLM_SERVICE}"
 
 # -------------------------------------------------------
 # ステップ 1.5: GitLab root パスワードを変更する
