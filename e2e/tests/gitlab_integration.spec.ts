@@ -19,7 +19,7 @@
  *   T-32: testuser-opencode の MR を opencode CLI で処理できる
  *   T-33: Claude Code が docker-compose を使用できることを検証
  *   T-34: opencode が docker-compose を使用できることを検証
- *   T-35: opencode で Claude のモデルを指定した MR 処理が完了する
+ *   T-35: opencode でプロバイダ名の付かない Claude のモデル名を指定した MR 処理が完了する
  *
  * 前提条件:
  *   - docker compose --profile test up -d で GitLab CE が起動済み
@@ -841,14 +841,15 @@ test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () =
 });
 
 // -----------------------------------------------------------------------
-// T-35: opencode で Claude のモデルを指定した MR 処理が完了する
+// T-35: opencode でプロバイダ名の付かない Claude のモデル名を指定した MR 処理が完了する
 // -----------------------------------------------------------------------
 
-test('T-35: opencodeでClaudeのモデルを指定したMR処理が完了する', async () => {
+test('T-35: opencodeでプロバイダ名の付かないClaudeのモデル名を指定したMR処理が完了する', async () => {
   await waitForFlakyTestBarrier();
   const projectId = GITLAB_PROJECT_ID;
   const suffix = Date.now();
-  const claudeModel = `anthropic/${process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001'}`;
+  // 本番の LiteLLM Proxy と同じく、プロバイダ名（anthropic/）を付けない名前で指定する
+  const claudeModel = process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
 
   // testuser-opencode のデフォルト CLI を opencode にする（デフォルトモデルは問わない）
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
@@ -890,7 +891,7 @@ test('T-35: opencodeでClaudeのモデルを指定したMR処理が完了する'
   );
   expect(hasCompletionComment).toBe(true);
 
-  // タスクに opencode と指定した Claude のモデルが記録され、完了している
+  // タスクに opencode と、書いたままの Claude のモデル名が記録され、完了している
   const recorded = await waitUntil(async () => {
     const tasks = await getBackendTasks(adminToken, {
       gitlab_project_id: projectId,

@@ -175,8 +175,9 @@
 | `DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.build_start_command` | 関数 |
 | `DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.fetch_all_container_images` | 関数 |
 | `DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.resolve` | 関数 |
-| `DS-FN-DETERMINE-OPENCODE-PROVIDER-FT-DETERMINE-OPENCODE-PROVIDER` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.split_opencode_model` | 関数 |
-| `DS-FN-BUILD-OPENCODE-PROVIDER-CONFIG-FT-CALL-CLAUDE-VIA-OPENCODE` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.build_opencode_provider_config` | 関数 |
+| `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.split_opencode_model` | 関数 |
+| `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.qualify_opencode_model` | 関数 |
+| `DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | `consumer/cli_adapter_resolver.py::CLIAdapterResolver.build_opencode_provider_config` | 関数 |
 | `DS-CL-CLI-CONTAINER-MANAGER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py::CLIContainerManager` | クラス |
 | `DS-FN-RUN-CLI-CONTAINER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py::CLIContainerManager.configure_git` | 関数 |
 | `DS-FN-RUN-CLI-CONTAINER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py::CLIContainerManager.exec_command` | 関数 |
