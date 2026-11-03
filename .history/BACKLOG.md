@@ -1,10 +1,13 @@
 # BACKLOG
 
+## 本番の GitLab の URL と opencode のタイトル用のモデル
+
+- [ ] 変更要件（`.history/20261103-gitlab-url-and-opencode-small-model/change_requirements.md`）を確定し、設計・実装する（追加 2026-11-03、重要 高）
+  - 起動の構成が GitLab の URL をテスト用に固定している問題（IDEAS の候補 12）と、opencode の OpenAI の経路のタイトル用のモデルの 400 を直す。ブランチ `feature/gitlab-url-and-opencode-small-model`
+
 ## opencode で Claude のモデルを使えるようにする
 概要: .history/2026-11-03-1405-opencodeでClaudeモデル/summary.md
 
-- [ ] PR #12（opencode にプロバイダ名の無いモデル名をそのまま指定できるようにする）をレビューして main へ取り込む（追加 2026-11-03、重要 高）
-  - 要件・設計は `.history/20261103-opencode-model-name-rule/`。モック全件通過、実 LLM では未確認
 - [ ] opencode の実 LLM のシナリオ（T-31・T-32・T-34）を流して通す（追加 2026-11-02、重要 低）
   - 2026-11-03 に Claude（Haiku）で T-31・T-32 は通過。T-34 は「T-33・T-34 の差分の確認が早すぎる」で落ちる
 

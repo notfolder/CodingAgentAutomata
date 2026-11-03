@@ -16,3 +16,4 @@
 ## opencode で Claude のモデルを使えるようにする
 
 - [x] (2026-11-03) 「プロバイダ/モデル」の形で Claude のモデルを LiteLLM 経由で呼べるようにする（`.history/20261102-opencode-claude-model/`、PR #11、main の `2b90edc` で取り込み済み）
+- [x] (2026-11-03) PR #12（opencode にプロバイダ名の無いモデル名をそのまま指定できるようにする）をレビューして main へ取り込む（`.history/20261103-opencode-model-name-rule/`、main の `d4f32f2` で取り込み済み）
