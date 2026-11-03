@@ -30,6 +30,8 @@ GitLab の Issue と Merge Request（以下、MR）に、bot のアサインと�
 | CLI アダプタ設定 | CLI エージェント ID ごとの、コンテナイメージ・起動コマンドのテンプレート・CLI への情報の渡し方の設定 | consumer、管理画面 | — |
 | Claude Code | Anthropic の CLI エージェント。CLI エージェント ID は `claude` | 組み込みのアダプタ | — |
 | opencode | OSS の CLI エージェント。CLI エージェント ID は `opencode` | 組み込みのアダプタ | — |
+| プロバイダ | opencode のモデル名のうち、`/` より前の部分。LLM の呼び方を表す（`openai` は OpenAI のモデル、`anthropic` は Claude のモデル） | opencode のモデル指定（デフォルトモデル、エージェント指定） | なし |
+| タイトル用のモデル | opencode が会話のタイトルを作るために、本体のモデルとは別に呼ぶモデル | opencode の実行 | 小さいモデル（small model） |
 | CLI コンテナ | consumer が Docker で起動する CLI 専用の単発のコンテナ。中で Docker デーモンを動かせる | F-3、F-4 | cli-exec コンテナ |
 | producer | GitLab の Issue／MR を見つけてタスクをキューに入れる部品 | 全体 | — |
 | consumer | キューのタスクを受け取り、CLI コンテナで Issue 処理と MR 処理を行う部品 | 全体 | — |
@@ -126,6 +128,7 @@ flowchart TD
 | 社内の Zscaler 環境では本システムを構築も利用もできない | `RQ-BZ-SYSTEM-BUILD-OPERATION` | Zscaler の配下でも、本システムを構築でき、Issue→MR 変換と MR 処理が社外と同じように完了する | Zscaler が差し替えた証明書を各部品が信頼できず、ビルド中のパッケージ取得と、実行時の GitLab API・LLM・git clone の通信が失敗する | Zscaler 環境でのビルドと起動の成功率 0%（目標 100%）。Zscaler 環境での Issue→MR 変換と MR 処理の完了率 0%（目標は社外と同じ水準） | 社内の開発者が本システムによる自動化を使えない |
 | 社外の開発環境では Zscaler 環境での動作を確かめられない | `RQ-BZ-ZSCALER-COMPAT-TEST` | 社内へ持ち込む前に、Zscaler 環境で起きる失敗を社外で再現して確かめられる | 開発環境は Zscaler の配下に無く、証明書の差し替えもプロキシの経由も起きない | 社外で確かめられる Zscaler 環境の失敗の種類 0 件（目標: 証明書の信頼、除外宛先、プロキシの経由のすべて） | 社内で初めて動かすときまで不具合が分からない |
 | 社内用のイメージが社外へ出るおそれがある | `RQ-BZ-SYSTEM-BUILD-OPERATION` | Zscaler の証明書を含むイメージは手元でだけ使われる | docker compose のイメージ名が ghcr.io の名前で、誤って push すると社内用のイメージが公開される | 誤って公開できる経路 1 つ（目標 0） | 社内の証明書を含むイメージが公開される |
+| opencode で Claude のモデルを指定すると、処理が失敗する | `RQ-BZ-ISSUE-TO-MR`、`RQ-BZ-MR-IMPLEMENTATION` | opencode でも Claude のモデルで Issue→MR 変換と MR 処理が完了する | opencode は OpenAI のモデルでしか動かず、Claude のモデルを指定すると LLM の呼び出しで失敗する | opencode で Claude のモデルを指定した処理の完了率 0%（目標: Claude Code で Claude のモデルを使ったときと同じ水準） | Claude のモデルしか契約していない環境では、opencode を選んだ開発者が自動化を使えない |
 
 ### 2-2. 業務課題一覧
 
@@ -138,6 +141,7 @@ flowchart TD
 | `RQ-BK-ZSCALER-CERT-TRUST` | 外へ出るすべての通信を Zscaler のプロキシ経由にし、Zscaler の証明書を必ず信頼して検証させる。Zscaler 設定は既定で必須とし、明示したときだけ外せる | 社内の Zscaler 環境では本システムを構築も利用もできない | Zscaler 環境でのビルドと起動の成功率 100%。Issue→MR 変換と MR 処理の完了率が社外と同じ水準 | `RQ-BZ-SYSTEM-BUILD-OPERATION` |
 | `RQ-BK-ZSCALER-MOCK-VERIFICATION` | Zscaler の役をする模擬プロキシを用意し、社外で Zscaler 環境での動作を確かめられるようにする | 社外の開発環境では Zscaler 環境での動作を確かめられない | 証明書の信頼、除外宛先、プロキシの経由の失敗を、社外ですべて再現して確かめられる | `RQ-BZ-ZSCALER-COMPAT-TEST` |
 | `RQ-BK-INTERNAL-IMAGE-CONTAINMENT` | Zscaler の証明書を含むイメージを社外のレジストリへ出さない | 社内用のイメージが社外へ出るおそれがある | 誤って公開できる経路 0 | `RQ-BZ-SYSTEM-BUILD-OPERATION` |
+| `RQ-BK-OPENCODE-CLAUDE-MODEL` | opencode から Claude のモデルを LiteLLM Proxy 経由で呼べるようにする | opencode で Claude のモデルを指定すると、処理が失敗する | opencode で Claude のモデルを指定した処理の完了率が、Claude Code で Claude のモデルを使ったときと同じ水準 | `RQ-BZ-ISSUE-TO-MR`、`RQ-BZ-MR-IMPLEMENTATION` |
 
 ### 2-3. 見込み経営効果
 
@@ -147,6 +151,7 @@ flowchart TD
 | `RQ-EF-COST-AVOIDANCE-LLM-OVERRUN` | Cost Avoidance | 利用者ごとの費用の追跡で、LLM の費用の超過を早く見つけ、予算の超過を防ぐ | 算定しない（同上） | `RQ-BK-LLM-COST-ALLOCATION` |
 | `RQ-EF-TCO-SAVINGS-DEV-PRODUCTIVITY` | TCO Savings | 開発者がレビューや設計に専念でき、開発全体の生産性が上がる | 算定しない（同上） | `RQ-BK-MR-AUTO-IMPLEMENTATION` |
 | `RQ-EF-SOFT-SAVING-INHOUSE-DEVELOPERS` | Soft Saving | 既存の効果（Issue 発生後のブランチ作成・コード実装・テスト実行・コミットの手作業工数の削減）が、社内の Zscaler 環境の開発者にも及ぶ | 算定しない（社内で使う人数がまだ決まっていないため） | `RQ-BK-ZSCALER-CERT-TRUST` |
+| `RQ-EF-SOFT-SAVING-OPENCODE-CLAUDE` | Soft Saving | 既存の効果（Issue 発生後のブランチ作成・コード実装・テスト実行・コミットの手作業工数の削減）が、opencode で Claude のモデルを使う開発者にも及ぶ | 算定しない（opencode で Claude のモデルを使う人数が決まっていないため） | `RQ-BK-OPENCODE-CLAUDE-MODEL` |
 
 ---
 
@@ -160,6 +165,7 @@ flowchart TD
 | GitLab API のレスポンス | 外部（GitLab） | ポーリングの Issue／MR の一覧、各詳細、コメント、プロジェクト、ユーザー |
 | MR の説明文 | 外部（GitLab の開発者） | CLI への作業の指示。エージェント指定を含むことがある |
 | 管理者の入力 | 人手（管理画面） | ユーザー、Virtual Key、デフォルトの CLI とモデル、テンプレート、MCP 設定、CLI アダプタ |
+| opencode のモデル名 | 人手（開発者・管理者） | 「プロバイダ/モデル」の形で書く（例: `anthropic/claude-opus-5-5`、`openai/gpt-4o-mini`）。デフォルトモデルの欄とエージェント指定に書く |
 | Zscaler の証明書ファイル | 人手（管理者） | PEM 形式のファイル。プロジェクト直下の決まった場所に置く。ルート証明書と中間証明書を 1 ファイルにまとめてよい |
 | ホストの OS の証明書の束 | ホストの OS | 証明書ファイルが無いときに使う。管理者がホストの準備で Zscaler の証明書を入れておく |
 | Zscaler 設定 | 人手（管理者） | `.env` に書く。有効・無効のスイッチ、プロキシの宛先、社内の除外宛先 |
@@ -197,6 +203,7 @@ flowchart TD
 | `RQ-FT-OVERRIDE-CLI-MODEL` | 業務機能 | エージェント指定 | MR の説明文の `agent:` の行に書いた CLI エージェントとモデルを、その MR 処理に使う | `RQ-BK-MR-AUTO-IMPLEMENTATION` | MR ごとに CLI やモデルを変えられない |
 | `RQ-FT-RUN-CLI-CONTAINER` | 業務機能 | CLI 実行環境の管理（F-5） | CLI ごとのイメージで、特権の単発コンテナを consumer と同じネットワークで起動し、プロンプトと起動コマンドをファイルで渡し、終わったら破棄する。consumer の起動時に各イメージのウォームアップを行う | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION` | CLI をホストから隔てて動かせない |
 | `RQ-FT-RESOLVE-CLI-ADAPTER` | 業務機能 | CLI アダプタの解決 | CLI アダプタ設定から、CLI に渡す環境変数（Virtual Key、LLM の URL、モデル、MCP 設定）と起動コマンドを組み立てる | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION`、`RQ-BK-LLM-COST-ALLOCATION` | CLI エージェントごとの渡し方の違いをコアの処理で扱うことになる |
+| `RQ-FT-CALL-CLAUDE-VIA-OPENCODE` | 業務機能 | opencode での Claude のモデルの呼び出し | CLI エージェントが opencode で、モデルのプロバイダが `anthropic` のとき、opencode が LiteLLM Proxy 経由で Claude のモデルを呼べるように、Virtual Key と LiteLLM Proxy の URL を opencode に渡す。Virtual Key は利用者のものをそのまま使い、費用の追跡は利用者ごとに分かれる。opencode のタイトル用のモデルには、利用者が指定したモデルと同じものを使う | `RQ-BK-OPENCODE-CLAUDE-MODEL` | opencode で Claude のモデルを指定した Issue→MR 変換と MR 処理が、LLM の呼び出しで失敗する |
 | `RQ-FT-BUILD-PROMPT` | 業務機能 | プロンプトの生成 | F-3・F-4 のテンプレート（F-4 はユーザー個別のものを優先）の変数を展開する。F-4 で必須の情報がテンプレートに無ければ末尾に足す | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION` | CLI への指示を作れない |
 | `RQ-FT-BUILD-MCP-CONFIG` | 業務機能 | MCP 設定の組み立て | システムの MCP 設定（ユーザーが有効にしている場合）とユーザー個別の MCP 設定をまとめて CLI に渡す（F-3 と F-4 で形が違う） | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION` | CLI が外部のツールを使えない |
 | `RQ-FT-REPORT-PROGRESS` | 業務機能 | 進捗報告（F-8） | MR 処理の間、CLI の出力を溜め、一定間隔（既定 60 秒）で MR の 1 件のコメントを作成・更新する | `RQ-BK-MR-AUTO-IMPLEMENTATION` | 実行状況と成否が開発者に見えない |
@@ -252,6 +259,7 @@ flowchart TD
 | `RQ-FT-JUDGE-MR-COMPLETION` | MR 処理の成否の判定 | CLI の終了コードが 0 以外なら失敗。0 でも、CLI が「何もしない」の定型句を出し、コミットも未コミットの変更も無ければ失敗。コミットが無いだけなら完了にして注意を書く | 失敗としてコメントする | `RQ-BK-MR-AUTO-IMPLEMENTATION` |
 | `RQ-FT-VALIDATE-USER-INPUT` | ユーザーの入力チェック | ユーザー名とメールは重複させない。ロールは admin か user。本人がパスワードを変えるときは現在のパスワードが要る | 画面にエラーを出して保存しない | `RQ-BK-LLM-COST-ALLOCATION` |
 | `RQ-FT-RESTRICT-ADAPTER-DELETE` | CLI アダプタの削除の制限 | 組み込みのアダプタと、ユーザーのデフォルト CLI として使われているアダプタは削除できない。CLI ID は重複させない | 画面にエラーを出して削除しない | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION` |
+| `RQ-FT-DETERMINE-OPENCODE-PROVIDER` | opencode のプロバイダの判定 | opencode のモデル名は「プロバイダ/モデル」の形で書く。プロバイダが `anthropic` なら Claude のモデルとして、`openai` なら OpenAI のモデルとして呼ぶ | LiteLLM Proxy に無いモデルや、`openai`・`anthropic` 以外のプロバイダを指定した場合は、CLI の失敗と同じく、タスクを失敗にしてコメントする | `RQ-BK-OPENCODE-CLAUDE-MODEL` |
 | `RQ-FT-PROTECT-GITLAB-PAT` | PAT の扱い | GitLab の PAT は環境変数だけで持ち、DB に保存せず、CLI コンテナの環境変数にも渡さない。F-4 の clone の URL にだけ埋め込む | — | `RQ-BK-MR-AUTO-IMPLEMENTATION` |
 | `RQ-FT-REQUIRE-ZSCALER-SETTINGS` | Zscaler 設定の必須チェック | Zscaler 設定のスイッチが有効（書いていない場合を含む）なとき、証明書の束（証明書ファイルまたはホストの OS の束）とプロキシの宛先の両方が揃っていなければならない。スイッチを明示的に無効にしたときだけ、証明書と宛先の両方を使わない | ビルドと起動を始めずに止め、足りない項目の名前と、スイッチで外す方法を標準エラーに表示する | `RQ-BK-ZSCALER-CERT-TRUST` |
 | `RQ-FT-VERIFY-ZSCALER-TRUST-BEFORE-USE` | 使用前の接続確認 | Zscaler 設定が有効なとき、ビルドと起動の前に、プロキシの宛先を経由して外部の HTTPS（パッケージの取得先）につなぎ、証明書の束で証明書を検証できることを確かめる | 検証に失敗したら、ビルドと起動を始めずに止め、失敗の原因（プロキシに接続できない、証明書を検証できない）を標準エラーに表示する | `RQ-BK-ZSCALER-CERT-TRUST` |
@@ -263,6 +271,7 @@ flowchart TD
 | `RQ-EX-GITLAB-REST-API` | GitLab | 取得・送信 | Issue・MR・コメント・ラベル・ブランチ・プロジェクト・ユーザー。CLI コンテナからの git の clone と push | ポーリング、F-3・F-4 の各段階 | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION` |
 | `RQ-EX-GITLAB-WEBHOOK` | GitLab | 受信 | Issue と MR のイベント（Group Webhook） | 出来事のたび | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION` |
 | `RQ-EX-LITELLM-PROXY` | LiteLLM Proxy | 送信 | CLI の LLM の呼び出し（Virtual Key で認証）、Virtual Key の検証とモデル一覧の取得 | CLI の実行中、ユーザーの更新時と編集画面の表示時 | `RQ-BK-LLM-COST-ALLOCATION`、`RQ-BK-MR-AUTO-IMPLEMENTATION` |
+| `RQ-EX-USE-LOCAL-HTTP-MOCK` | LiteLLM Proxy（テスト環境） | 送信 | モック LLM モードでは、モック LLM（ローカルの HTTP サーバー）を LiteLLM Proxy の転送先にし、opencode からの Claude のモデルの呼び出しも受ける。モック LLM が応じない設定項目は、LiteLLM Proxy が捨ててから転送する | opencode で Claude のモデルを指定したシナリオの実行中 | `RQ-BK-OPENCODE-CLAUDE-MODEL`、`RQ-BK-AUTOMATED-VERIFICATION` |
 
 RabbitMQ は外部連携先ではなく、本システムの中のキューとして扱う。
 
@@ -297,8 +306,8 @@ RabbitMQ は外部連携先ではなく、本システムの中のキューと�
 | cli_id | `claude` | `opencode` |
 | container_image | `coding-agent-cli-exec-claude:latest` | `coding-agent-cli-exec-opencode:latest` |
 | 起動コマンドのテンプレート | `cat /tmp/prompt.txt \| claude -p --verbose --include-partial-messages --include-hook-events --output-format stream-json --dangerously-skip-permissions --model {model} --mcp-config '{mcp_config}'` | `cat /tmp/prompt.txt \| opencode run - --model {model}` |
-| llm_api_key | 環境変数 `ANTHROPIC_API_KEY` | 環境変数 `OPENAI_API_KEY` |
-| llm_base_url | 環境変数 `ANTHROPIC_BASE_URL` | `OPENCODE_CONFIG_CONTENT` の JSON の `provider.<プロバイダー>.options.baseURL` |
+| llm_api_key | 環境変数 `ANTHROPIC_API_KEY` | 環境変数 `OPENAI_API_KEY`。プロバイダが `anthropic` のときは、`OPENCODE_CONFIG_CONTENT` の JSON の `provider.anthropic.options.apiKey` にも入れる |
+| llm_base_url | 環境変数 `ANTHROPIC_BASE_URL` | `OPENCODE_CONFIG_CONTENT` の JSON の `provider.<プロバイダー>.options.baseURL`。プロバイダが `anthropic` のときは末尾に `/v1` を付け、JSON の `small_model` に指定のモデル名を入れる |
 | MCP 設定 | `--mcp-config` に展開 | `OPENCODE_CONFIG_CONTENT` の JSON の `mcp` |
 
 ---
@@ -433,6 +442,7 @@ flowchart TD
 | `RQ-NF-TLS-VERIFICATION-ALWAYS-ON` | セキュリティ | 証明書の検証を無効にしない: 本システムのすべての部品と、模擬プロキシを使うテストで、通信の証明書の検証を無効にする設定を使わない | `RQ-BK-ZSCALER-CERT-TRUST`、`RQ-BK-ZSCALER-MOCK-VERIFICATION` | Zscaler の証明書を信頼しないまま通信が通り、なりすましを見抜けなくなる。テストで信頼の不具合が隠れる |
 | `RQ-NF-EXISTING-ENV-MIGRATION` | 移行性 | 既存の `.env` の移行: 既存の `.env` には Zscaler 設定が無く、スイッチは有効とみなされる。社外で動かしている既存の環境は、スイッチを無効にする 1 行を `.env` に書き足す。移すデータは無い | `RQ-BK-ZSCALER-CERT-TRUST` | 既存の社外の環境が、変更の取り込み後にビルドと起動で止まる |
 | `RQ-NF-CLI-EXTRA-SETUP-MIGRATION` | 移行性 | CLI コンテナの追加環境のコマンドの移行: CLI コンテナの土台の Linux が変わるため、イメージのビルド時に渡す追加環境の構築コマンドは、新しい土台のパッケージ管理の書き方で書く。README の例も新しい書き方にする。CLI アダプタ設定のイメージ名は変えないので、DB のデータの移行は無い | `RQ-BK-ZSCALER-CERT-TRUST` | 旧い土台の書き方の追加環境のコマンドを渡すと、CLI コンテナのビルドが失敗する |
+| `RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` | 移行性 | 既存の環境での移行作業の不要: 既存の環境は、更新したイメージで起動し直すだけで、opencode で Claude のモデルを使える。DB の CLI アダプタ設定の書き換えも、初期セットアップの再実行も要らない。移すデータは無い | `RQ-BK-OPENCODE-CLAUDE-MODEL` | 運用者が設定の書き換えを忘れると、更新しても opencode で Claude のモデルが使えないまま失敗する |
 
 可用性の要求は無い（止まったら自動で再起動し、それでも駄目なら手で直す）。データの移行は無い（設定の移行は上の表のとおり）。認証は管理画面のパスワード認証だけで、SSO は使わない。監査証跡の改ざん防止は要らない。
 
@@ -469,6 +479,7 @@ flowchart TD
 | `RQ-TS-VERIFY-MR-PROGRESS-REPORT` | MR 処理と進捗報告 | Draft MR がある | MR に指示を書いて処理させる | 進捗コメントと完了コメントが付く | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-AUTOMATED-VERIFICATION` |
 | `RQ-TS-VERIFY-BOT-UNASSIGN-STOP` | アサイン解除での停止 | MR 処理の実行中 | bot のアサインを外す | タスクが失敗になり、強制終了のコメントが付く | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-AUTOMATED-VERIFICATION` |
 | `RQ-TS-VERIFY-OPENCODE-CLI` | opencode での処理 | opencode のテストユーザー | Issue→MR 変換と MR 処理 | どちらも完了する | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-ISSUE-TO-MR-AUTOMATION`、`RQ-BK-AUTOMATED-VERIFICATION` |
+| `RQ-TS-VERIFY-OPENCODE-CLAUDE-MODEL` | opencode で Claude のモデルを指定した MR 処理 | 既存の opencode のテストユーザーの Draft MR がある。モック LLM モードと実 LLM モードの両方で行う。実 LLM モードでは、Anthropic の API キーだけを `.env` に設定している | エージェント指定に opencode と、LiteLLM Proxy にある `anthropic/` で始まる Claude のモデル名を書き、bot とラベルを付けて MR 処理を行わせる | MR 処理が完了し、完了コメントが付く。タスクに使った CLI（opencode）と指定したモデルが記録される | `RQ-BK-OPENCODE-CLAUDE-MODEL`、`RQ-BK-AUTOMATED-VERIFICATION` |
 | `RQ-TS-VERIFY-DOCKER-COMPOSE-IN-CLI` | CLI コンテナの中での docker compose | 実 LLM モード | Claude Code と opencode に docker compose を使う指示を出す | 「Hello from Docker!」のコメントと `docker-compose.yml` の差分ができる | `RQ-BK-MR-AUTO-IMPLEMENTATION`、`RQ-BK-AUTOMATED-VERIFICATION` |
 | `RQ-TS-VERIFY-BUILD-VIA-ZSCALER-MOCK` | 模擬プロキシ経由で本システムのイメージをすべてビルドできることを確かめる | 社外の開発環境。証明書ファイルは置いていない | `./scripts/test_setup.sh --zscaler-mock` を実行する | 使用前の接続確認が成功し、本システムのイメージ（backend、producer、consumer、frontend、CLI コンテナ 2 種）のビルドが模擬プロキシ経由で成功し、終了コードが 0 になる | `RQ-BK-ZSCALER-MOCK-VERIFICATION`、`RQ-BK-ZSCALER-CERT-TRUST` |
 | `RQ-TS-VERIFY-RUNTIME-HTTPS-VIA-ZSCALER-MOCK` | 実行中の各部品から、模擬プロキシ経由で外部の HTTPS に証明書を検証してつなげることを確かめる | 模擬プロキシ付きのセットアップが完了している | backend、producer、consumer と、CLI コンテナ 2 種の中から、外部の HTTPS（パッケージの取得先と LLM の API）へ、各部品が実際に使う通信の仕組みでつなぐ | すべての接続が模擬プロキシを経由し、証明書の検証が成功する | `RQ-BK-ZSCALER-MOCK-VERIFICATION`、`RQ-BK-ZSCALER-CERT-TRUST` |
@@ -493,7 +504,8 @@ flowchart TD
 | `RQ-BK-MR-AUTO-IMPLEMENTATION` | `RQ-EF-SOFT-SAVING-MANUAL-IMPLEMENTATION`、`RQ-EF-TCO-SAVINGS-DEV-PRODUCTIVITY`、`RQ-FT-RECEIVE-WEBHOOK`、`RQ-FT-POLL-GITLAB`、`RQ-FT-SUPPRESS-DUPLICATE-WEBHOOK`、`RQ-FT-ENQUEUE-TASK`、`RQ-FT-PROCESS-MR`、`RQ-FT-OVERRIDE-CLI-MODEL`、`RQ-FT-RUN-CLI-CONTAINER`、`RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-BUILD-PROMPT`、`RQ-FT-BUILD-MCP-CONFIG`、`RQ-FT-REPORT-PROGRESS`、`RQ-FT-MONITOR-BOT-ASSIGNMENT`、`RQ-FT-ENFORCE-CLI-TIMEOUT`、`RQ-FT-MASK-CLI-LOG`、`RQ-FT-DETECT-TTY-WAIT`、`RQ-FT-GRACEFUL-SHUTDOWN`、`RQ-FT-MANAGE-CLI-ADAPTERS`、`RQ-FT-MANAGE-SYSTEM-SETTINGS`、`RQ-FT-LIST-TASK-HISTORY`、`RQ-FT-SETUP-INITIAL-DATA`、`RQ-FT-BUILD-CLI-IMAGES`、`RQ-FT-JUDGE-TARGET-EVENT`、`RQ-FT-PREVENT-DUPLICATE-TASK`、`RQ-FT-TRANSITION-LABELS`、`RQ-FT-JUDGE-MR-COMPLETION`、`RQ-FT-RESTRICT-ADAPTER-DELETE`、`RQ-FT-PROTECT-GITLAB-PAT`、`RQ-UI-GITLAB-COMMENTS`、`RQ-EX-GITLAB-REST-API`、`RQ-EX-GITLAB-WEBHOOK`、`RQ-EX-LITELLM-PROXY`、`RQ-UI-TASK-API`、`RQ-UI-CLI-ADAPTER-API`、`RQ-UI-SETTINGS-API`、`RQ-UI-WEBHOOK-API`、`RQ-UI-HEALTH-API`、`RQ-UI-SETUP-CMD`、`RQ-UI-BUILD-CLI-EXEC-CMD`、`RQ-UI-ENV-SETTINGS`、`RQ-DT-TASK-MESSAGE`、`RQ-DT-CLI-ADAPTER-ENTITY`、`RQ-DT-TASK-ENTITY`、`RQ-DT-SYSTEM-SETTINGS-ENTITY`、`RQ-DT-TASK-CREATE-PENDING`、`RQ-DT-TASK-PENDING-TO-RUNNING`、`RQ-DT-TASK-RUNNING-TO-COMPLETED`、`RQ-DT-TASK-RUNNING-TO-FAILED`、`RQ-UI-TASK-HISTORY-SCREEN`、`RQ-UI-SYSTEM-SETTINGS-SCREEN`、`RQ-NF-CLI-START-3MIN`、`RQ-NF-CONCURRENT-TASKS`、`RQ-NF-DIND-TRUSTED-USERS`、`RQ-OP-HEALTH-MONITORING`、`RQ-OP-TASK-LOG-STORE`、`RQ-TS-VERIFY-PROMPT-TEMPLATES`、`RQ-TS-VERIFY-TTY-DETECTION`、`RQ-TS-VERIFY-MR-PROGRESS-REPORT`、`RQ-TS-VERIFY-BOT-UNASSIGN-STOP`、`RQ-TS-VERIFY-OPENCODE-CLI`、`RQ-TS-VERIFY-DOCKER-COMPOSE-IN-CLI` |
 | `RQ-BK-LLM-COST-ALLOCATION` | `RQ-EF-COST-AVOIDANCE-LLM-OVERRUN`、`RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-AUTHENTICATE-USER`、`RQ-FT-AUTHORIZE-BY-ROLE`、`RQ-FT-MANAGE-USERS`、`RQ-FT-ENCRYPT-VIRTUAL-KEY`、`RQ-FT-VALIDATE-LLM-KEY`、`RQ-FT-SUGGEST-MODEL-CANDIDATES`、`RQ-FT-LIST-TASK-HISTORY`、`RQ-FT-MIGRATE-DB-ON-STARTUP`、`RQ-FT-SETUP-INITIAL-DATA`、`RQ-FT-DETERMINE-TASK-USER`、`RQ-FT-REJECT-UNREGISTERED-USER`、`RQ-FT-VALIDATE-USER-INPUT`、`RQ-EX-LITELLM-PROXY`、`RQ-UI-AUTH-API`、`RQ-UI-USER-API`、`RQ-UI-TASK-API`、`RQ-UI-SETUP-CMD`、`RQ-UI-ENV-SETTINGS`、`RQ-DT-POSTGRESQL-STORE`、`RQ-DT-USER-ENTITY`、`RQ-DT-USER-ACTIVATION`、`RQ-UI-LOGIN-SCREEN`、`RQ-UI-USER-LIST-SCREEN`、`RQ-UI-USER-DETAIL-SCREEN`、`RQ-UI-USER-CREATE-SCREEN`、`RQ-UI-USER-EDIT-SCREEN`、`RQ-UI-TASK-HISTORY-SCREEN`、`RQ-NF-INTERNAL-NETWORK-ONLY`、`RQ-NF-SCREEN-TRANSITION-2S`、`RQ-NF-SECRET-PROTECTION`、`RQ-TS-VERIFY-LOGIN-AND-ACCESS`、`RQ-TS-VERIFY-USER-MANAGEMENT`、`RQ-TS-VERIFY-TASK-HISTORY`、`RQ-TS-VERIFY-LLM-SETTINGS`、`RQ-TS-VERIFY-NON-TARGET-EVENTS` |
 | `RQ-BK-ISSUE-TO-MR-AUTOMATION` | `RQ-EF-SOFT-SAVING-MANUAL-IMPLEMENTATION`、`RQ-FT-RECEIVE-WEBHOOK`、`RQ-FT-POLL-GITLAB`、`RQ-FT-SUPPRESS-DUPLICATE-WEBHOOK`、`RQ-FT-ENQUEUE-TASK`、`RQ-FT-CONVERT-ISSUE-TO-MR`、`RQ-FT-RUN-CLI-CONTAINER`、`RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-BUILD-PROMPT`、`RQ-FT-BUILD-MCP-CONFIG`、`RQ-FT-ENFORCE-CLI-TIMEOUT`、`RQ-FT-GRACEFUL-SHUTDOWN`、`RQ-FT-MANAGE-CLI-ADAPTERS`、`RQ-FT-MANAGE-SYSTEM-SETTINGS`、`RQ-FT-BUILD-CLI-IMAGES`、`RQ-FT-JUDGE-TARGET-EVENT`、`RQ-FT-PREVENT-DUPLICATE-TASK`、`RQ-FT-TRANSITION-LABELS`、`RQ-FT-RESTRICT-ADAPTER-DELETE`、`RQ-UI-GITLAB-COMMENTS`、`RQ-EX-GITLAB-REST-API`、`RQ-EX-GITLAB-WEBHOOK`、`RQ-UI-CLI-ADAPTER-API`、`RQ-UI-SETTINGS-API`、`RQ-UI-WEBHOOK-API`、`RQ-DT-TASK-MESSAGE`、`RQ-DT-CLI-ADAPTER-ENTITY`、`RQ-DT-TASK-ENTITY`、`RQ-DT-SYSTEM-SETTINGS-ENTITY`、`RQ-DT-TASK-CREATE-PENDING`、`RQ-DT-TASK-PENDING-TO-RUNNING`、`RQ-DT-TASK-RUNNING-TO-COMPLETED`、`RQ-DT-TASK-RUNNING-TO-FAILED`、`RQ-UI-SYSTEM-SETTINGS-SCREEN`、`RQ-NF-WEBHOOK-ENQUEUE-3S`、`RQ-NF-ISSUE-TO-MR-5MIN`、`RQ-TS-VERIFY-WEBHOOK-RECEIVE`、`RQ-TS-VERIFY-ISSUE-TO-MR`、`RQ-TS-VERIFY-NON-TARGET-EVENTS`、`RQ-TS-VERIFY-NO-DUPLICATE-PROCESSING`、`RQ-TS-VERIFY-OPENCODE-CLI` |
-| `RQ-BK-AUTOMATED-VERIFICATION` | `RQ-FT-SETUP-TEST-ENVIRONMENT`、`RQ-FT-PROVIDE-MOCK-LLM`、`RQ-FT-MEASURE-CLI-CONTAINER-STARTUP`、`RQ-FT-PUBLISH-COMPONENT-IMAGES`、`RQ-FT-CHECK-TRACEABILITY`、`RQ-UI-TEST-SETUP-CMD`、`RQ-TS-VERIFY-LOGIN-AND-ACCESS`、`RQ-TS-VERIFY-USER-MANAGEMENT`、`RQ-TS-VERIFY-TASK-HISTORY`、`RQ-TS-VERIFY-WEBHOOK-RECEIVE`、`RQ-TS-VERIFY-LLM-SETTINGS`、`RQ-TS-VERIFY-PROMPT-TEMPLATES`、`RQ-TS-VERIFY-TTY-DETECTION`、`RQ-TS-VERIFY-ISSUE-TO-MR`、`RQ-TS-VERIFY-NON-TARGET-EVENTS`、`RQ-TS-VERIFY-NO-DUPLICATE-PROCESSING`、`RQ-TS-VERIFY-MR-PROGRESS-REPORT`、`RQ-TS-VERIFY-BOT-UNASSIGN-STOP`、`RQ-TS-VERIFY-OPENCODE-CLI`、`RQ-TS-VERIFY-DOCKER-COMPOSE-IN-CLI` |
+| `RQ-BK-AUTOMATED-VERIFICATION` | `RQ-FT-SETUP-TEST-ENVIRONMENT`、`RQ-FT-PROVIDE-MOCK-LLM`、`RQ-FT-MEASURE-CLI-CONTAINER-STARTUP`、`RQ-FT-PUBLISH-COMPONENT-IMAGES`、`RQ-FT-CHECK-TRACEABILITY`、`RQ-UI-TEST-SETUP-CMD`、`RQ-TS-VERIFY-LOGIN-AND-ACCESS`、`RQ-TS-VERIFY-USER-MANAGEMENT`、`RQ-TS-VERIFY-TASK-HISTORY`、`RQ-TS-VERIFY-WEBHOOK-RECEIVE`、`RQ-TS-VERIFY-LLM-SETTINGS`、`RQ-TS-VERIFY-PROMPT-TEMPLATES`、`RQ-TS-VERIFY-TTY-DETECTION`、`RQ-TS-VERIFY-ISSUE-TO-MR`、`RQ-TS-VERIFY-NON-TARGET-EVENTS`、`RQ-TS-VERIFY-NO-DUPLICATE-PROCESSING`、`RQ-TS-VERIFY-MR-PROGRESS-REPORT`、`RQ-TS-VERIFY-BOT-UNASSIGN-STOP`、`RQ-TS-VERIFY-OPENCODE-CLI`、`RQ-TS-VERIFY-DOCKER-COMPOSE-IN-CLI`、`RQ-EX-USE-LOCAL-HTTP-MOCK`、`RQ-TS-VERIFY-OPENCODE-CLAUDE-MODEL` |
 | `RQ-BK-ZSCALER-CERT-TRUST` | `RQ-EF-SOFT-SAVING-INHOUSE-DEVELOPERS`、`RQ-UI-ZSCALER-ENV-SETTINGS`、`RQ-FT-RESOLVE-CERT-BUNDLE`、`RQ-FT-BUILD-NO-PROXY-LIST`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD`、`RQ-FT-APPLY-ZSCALER-SETTINGS-RUNTIME`、`RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER`、`RQ-FT-RUN-STANDARD-BROWSERS-CLI-CONTAINER`、`RQ-FT-APPLY-ZSCALER-SETTINGS-CLI-BROWSER`、`RQ-FT-INSTRUCT-CLI-ZSCALER`、`RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT`、`RQ-FT-REQUIRE-ZSCALER-SETTINGS`、`RQ-FT-VERIFY-ZSCALER-TRUST-BEFORE-USE`、`RQ-DT-ZSCALER-CERT-FILE`、`RQ-DT-ZSCALER-SETTINGS-ENV`、`RQ-NF-TLS-VERIFICATION-ALWAYS-ON`、`RQ-NF-EXISTING-ENV-MIGRATION`、`RQ-NF-CLI-EXTRA-SETUP-MIGRATION`、`RQ-OP-ZSCALER-SETUP-PROCEDURE`、`RQ-TS-VERIFY-BUILD-VIA-ZSCALER-MOCK`、`RQ-TS-VERIFY-RUNTIME-HTTPS-VIA-ZSCALER-MOCK`、`RQ-TS-VERIFY-UNTRUSTED-CERT-STOPS`、`RQ-TS-VERIFY-MISSING-SETTINGS-STOP`、`RQ-TS-VERIFY-DISABLED-SWITCH`、`RQ-TS-VERIFY-OS-BUNDLE-FALLBACK`、`RQ-TS-VERIFY-MOCK-LLM-E2E-WITH-ZSCALER`、`RQ-TS-VERIFY-REAL-LLM-E2E-VIA-MOCK`、`RQ-TS-VERIFY-CLI-ZSCALER-INSTRUCTION`、`RQ-TS-VERIFY-CLI-BROWSER-TRUST`、`RQ-TS-VERIFY-CLI-STANDARD-BROWSERS` |
 | `RQ-BK-ZSCALER-MOCK-VERIFICATION` | `RQ-UI-TEST-SETUP-ZSCALER-MOCK-OPTION`、`RQ-FT-RUN-ZSCALER-MOCK-PROXY`、`RQ-NF-TLS-VERIFICATION-ALWAYS-ON`、`RQ-OP-ZSCALER-SETUP-PROCEDURE`、`RQ-TS-VERIFY-BUILD-VIA-ZSCALER-MOCK`、`RQ-TS-VERIFY-RUNTIME-HTTPS-VIA-ZSCALER-MOCK`、`RQ-TS-VERIFY-UNTRUSTED-CERT-STOPS`、`RQ-TS-VERIFY-MOCK-LLM-E2E-WITH-ZSCALER`、`RQ-TS-VERIFY-REAL-LLM-E2E-VIA-MOCK`、`RQ-TS-VERIFY-CLI-BROWSER-TRUST`、`RQ-TS-VERIFY-REAL-SETTINGS-UNCHANGED` |
 | `RQ-BK-INTERNAL-IMAGE-CONTAINMENT` | `RQ-FT-SEPARATE-PUBLISHED-IMAGE-NAMES`、`RQ-TS-VERIFY-LOCAL-IMAGE-NAMES` |
+| `RQ-BK-OPENCODE-CLAUDE-MODEL` | `RQ-EF-SOFT-SAVING-OPENCODE-CLAUDE`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER`、`RQ-EX-USE-LOCAL-HTTP-MOCK`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION`、`RQ-TS-VERIFY-OPENCODE-CLAUDE-MODEL` |
