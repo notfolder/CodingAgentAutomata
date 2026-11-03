@@ -74,8 +74,17 @@ fi
 # .env を読み込む（.env の値で既存の環境変数を上書きする。
 # 実行時に環境変数で値を指定しても .env の値が優先される点に注意）
 # -------------------------------------------------------
+# 構築の前後で .env を書き換えていないことをホストの E2E で確かめるため、読み込む前にハッシュを取る
+ENV_FILE_HASH_AT_START=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "${ENV_FILE}")
+
 echo ".env を読み込みます: ${ENV_FILE}"
 load_env_file "${ENV_FILE}"
+
+# ホスト（このスクリプトと test_setup.py）から呼ぶテスト用の GitLab の URL。
+# .env の GITLAB_API_URL は本番の GitLab の URL なので使わない。
+# コンテナから見た URL は test_setup.py が .env.test に書く
+TEST_GITLAB_HOST_URL="http://localhost:8929"
+export GITLAB_API_URL="${TEST_GITLAB_HOST_URL}"
 
 # GitLab コンテナ名（.env 未設定時は docker-compose の既定名を使用）
 GITLAB_CONTAINER="${GITLAB_CONTAINER:-codingagentautomata-gitlab-1}"
@@ -414,6 +423,8 @@ export LITELLM_MASTER_KEY
 if [ -f "${ENV_TEST_FILE}" ]; then
     echo "  .env.test を読み込みます: ${ENV_TEST_FILE}"
     load_env_file "${ENV_TEST_FILE}"
+    # .env.test の GITLAB_API_URL はコンテナから見た URL なので、ホストで使う URL に戻す
+    export GITLAB_API_URL="${TEST_GITLAB_HOST_URL}"
 fi
 
 # -------------------------------------------------------
@@ -695,6 +706,8 @@ if [ "${RUN_TESTS}" = "true" ]; then
 
     # テスト失敗時も後処理を実行できるように一時的にerrexitを無効化
     set +e
+    # ホストの E2E が、この時刻以降の LiteLLM Proxy のログを調べる
+    E2E_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     docker compose run --rm "${PLAYWRIGHT_SERVICE}" sh -c "npm install --silent && npx playwright test 2>&1"
     PLAYWRIGHT_EXIT_CODE=$?
     set -e
@@ -707,16 +720,21 @@ if [ "${RUN_TESTS}" = "true" ]; then
         exit ${PLAYWRIGHT_EXIT_CODE}
     fi
 
-    # Zscaler の E2E も実行する（模擬プロキシの有無で、確かめるシナリオが変わる）
+    # ホストから確かめる E2E（Zscaler、GitLab の URL、LiteLLM Proxy のログなど）も実行する
+    # （模擬プロキシの有無で、確かめるシナリオが変わる）
     if true; then
         echo ""
-        echo "[ステップ 8] Zscaler の E2E を実行します（e2e/zscaler）..."
+        echo "[ステップ 8] ホストから確かめる E2E を実行します（e2e/zscaler）..."
         set +e
-        E2E_REAL_LLM="${REAL_LLM}" "${VENV_DIR}/bin/python3" -m pytest "${PROJECT_ROOT}/e2e/zscaler" -q -p no:cacheprovider
+        E2E_REAL_LLM="${REAL_LLM}" \
+            E2E_STARTED_AT="${E2E_STARTED_AT}" \
+            E2E_LITELLM_SERVICE="${LITELLM_SERVICE}" \
+            E2E_ENV_FILE_HASH="${ENV_FILE_HASH_AT_START}" \
+            "${VENV_DIR}/bin/python3" -m pytest "${PROJECT_ROOT}/e2e/zscaler" -q -p no:cacheprovider
         ZSCALER_E2E_EXIT_CODE=$?
         set -e
         if [ ${ZSCALER_E2E_EXIT_CODE} -ne 0 ]; then
-            echo "エラー: Zscaler の E2E が失敗しました (exit code: ${ZSCALER_E2E_EXIT_CODE})" >&2
+            echo "エラー: ホストから確かめる E2E が失敗しました (exit code: ${ZSCALER_E2E_EXIT_CODE})" >&2
             exit ${ZSCALER_E2E_EXIT_CODE}
         fi
     fi

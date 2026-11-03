@@ -211,9 +211,11 @@ class CLIAdapterResolver:
         opencode の設定 JSON のうち、provider と small_model の部分を組み立てる。
 
         プロバイダが "anthropic" の場合は、LiteLLM Proxy の Anthropic 形式の入口を
-        使うため URL の末尾に "/v1" を付け、Virtual Key を apiKey に入れ、
-        タイトル用のモデル（small_model）に「プロバイダ/モデル」の形のモデル名を使う。
-        それ以外のプロバイダでは、URL だけを baseURL に入れる（従来どおり）。
+        使うため URL の末尾に "/v1" を付け、Virtual Key を apiKey に入れる。
+        それ以外のプロバイダでは、URL だけを baseURL に入れる。
+        どのプロバイダでも、タイトル用のモデル（small_model）には
+        「プロバイダ/モデル」の形の本体のモデル名を使う（opencode の既定の
+        タイトル用のモデルは LiteLLM Proxy に無いことがあるため）。
 
         Args:
             model: 利用者が書いたモデル名（例: "claude-opus-5-5"、"anthropic/claude-opus-5-5"）
@@ -221,20 +223,20 @@ class CLIAdapterResolver:
             llm_api_key: 利用者の Virtual Key（無ければ None）
 
         Returns:
-            dict: {"provider": {...}} と、anthropic の場合は "small_model" を含む辞書
+            dict: {"provider": {...}, "small_model": "プロバイダ/モデル"} の辞書
         """
         provider_id, _ = CLIAdapterResolver.split_opencode_model(model)
-        if provider_id != _ANTHROPIC_PROVIDER:
-            return {"provider": {provider_id: {"options": {"baseURL": llm_base_url}}}}
-
-        base_url: str = llm_base_url.rstrip("/")
-        if not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
-        options: dict = {"baseURL": base_url}
-        if llm_api_key:
-            options["apiKey"] = llm_api_key
+        if provider_id == _ANTHROPIC_PROVIDER:
+            base_url: str = llm_base_url.rstrip("/")
+            if not base_url.endswith("/v1"):
+                base_url = f"{base_url}/v1"
+            options: dict = {"baseURL": base_url}
+            if llm_api_key:
+                options["apiKey"] = llm_api_key
+        else:
+            options = {"baseURL": llm_base_url}
         return {
-            "provider": {_ANTHROPIC_PROVIDER: {"options": options}},
+            "provider": {provider_id: {"options": options}},
             "small_model": CLIAdapterResolver.qualify_opencode_model(model),
         }
 

@@ -151,9 +151,6 @@ services:
         required: false
       - .zscaler/zscaler.env
     extra_hosts: *zscaler-extra-hosts
-    environment:
-      # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
-      GITLAB_API_URL: http://gitlab:8929
     depends_on:
       - postgresql
       - rabbitmq
@@ -185,8 +182,6 @@ services:
       - .zscaler/zscaler.env
     extra_hosts: *zscaler-extra-hosts
     environment:
-      # .env.test のlocalhost URL をDockerネットワーク内部名で上書き
-      GITLAB_API_URL: http://gitlab:8929
       # DinD コンテナ起動の遅延（T-30 後等の高負荷時）に対応するため Docker クライアントタイムアウトを延長
       DOCKER_CLIENT_TIMEOUT_SEC: "240"
     depends_on:
@@ -348,7 +343,6 @@ services:
       # npm の通信を Zscaler の証明書の束で検証する
       NODE_EXTRA_CA_CERTS: /etc/zscaler/ca-bundle.pem
       # コンテナ内から到達可能なDockerサービス名でURLを上書き
-      GITLAB_API_URL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
       BASE_URL: http://frontend:80
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
@@ -399,7 +393,6 @@ services:
       # npm の通信を Zscaler の証明書の束で検証する
       NODE_EXTRA_CA_CERTS: /etc/zscaler/ca-bundle.pem
       # コンテナ内から到達可能なDockerサービス名でURLを上書き
-      GITLAB_API_URL: http://gitlab:8929
       BACKEND_URL: http://backend:8000
       BASE_URL: http://frontend:80
       # デフォルトモデル（.env の DEFAULT_*_MODEL で変更可能）

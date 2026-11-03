@@ -20,6 +20,7 @@
  *   T-33: Claude Code が docker-compose を使用できることを検証
  *   T-34: opencode が docker-compose を使用できることを検証
  *   T-35: opencode でプロバイダ名の付かない Claude のモデル名を指定した MR 処理が完了する
+ *   T-36: opencode でプロバイダ名の付かない Claude のモデル名を使う Issue→MR 変換が完了する
  *
  * 前提条件:
  *   - docker compose --profile test up -d で GitLab CE が起動済み
@@ -57,6 +58,46 @@ const POLLING_INTERVAL_MS = 3_000;  // ポーリング間隔3秒
 // GitLab API ヘルパー
 // -----------------------------------------------------------------------
 
+/** 相手が接続を切ったときに、やり直してよい読み取りの要求のメソッド */
+const RETRYABLE_METHODS = new Set(['GET', 'HEAD']);
+
+/**
+ * fetch の失敗が、相手に接続を切られたこと（使い回した接続を相手が先に閉じた場合など）によるものかを返す。
+ *
+ * @param err fetch が投げた例外
+ * @returns 接続を切られた失敗なら true
+ */
+function isSocketClosedError(err: unknown): boolean {
+  const cause = (err as { cause?: { code?: string } } | null)?.cause;
+  return err instanceof TypeError && (cause?.code === 'UND_ERR_SOCKET' || cause?.code === 'ECONNRESET');
+}
+
+/**
+ * GitLab と backend の API を呼ぶ共通の関数。
+ * 通信に失敗したら、メソッドと URL を入れたエラーにする（どちらのサーバーとの通信かを分かるようにするため）。
+ * 相手に接続を切られたときは、読み取りの要求（GET・HEAD）だけ 1 回やり直す。
+ *
+ * @param url 呼び出す URL（トークンは入れず、ヘッダーで渡す）
+ * @param init fetch に渡す設定
+ * @returns 応答
+ */
+async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (!(RETRYABLE_METHODS.has(method) && isSocketClosedError(err))) {
+      throw new Error(`${method} ${url} の通信に失敗しました: ${String(err)}`, { cause: err });
+    }
+    console.warn(`[apiFetch] ${method} ${url} で接続を切られたため、1 回やり直します: ${String(err)}`);
+    try {
+      return await fetch(url, init);
+    } catch (retryErr) {
+      throw new Error(`${method} ${url} の通信に 2 回続けて失敗しました: ${String(retryErr)}`, { cause: retryErr });
+    }
+  }
+}
+
 /**
  * GitLab REST API を呼び出す共通ヘルパー
  */
@@ -75,7 +116,7 @@ async function gitlabApi(
   if (body) {
     options.body = JSON.stringify(body);
   }
-  const resp = await fetch(url, options);
+  const resp = await apiFetch(url, options);
   let data: unknown;
   try {
     data = await resp.json();
@@ -89,7 +130,7 @@ async function gitlabApi(
  * Backend API にログインして JWT トークンを取得する
  */
 async function backendLogin(username: string, password: string): Promise<string> {
-  const resp = await fetch(`${BACKEND_URL}/api/auth/login`, {
+  const resp = await apiFetch(`${BACKEND_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
@@ -107,7 +148,7 @@ async function getBackendTasks(token: string, params: Record<string, string> = {
   // API 非対応のパラメータをクライアントフィルタ用に分離
   const { gitlab_project_id, source_iid, ...apiParams } = params;
   const query = new URLSearchParams(apiParams).toString();
-  const resp = await fetch(`${BACKEND_URL}/api/tasks${query ? '?' + query : ''}`, {
+  const resp = await apiFetch(`${BACKEND_URL}/api/tasks${query ? '?' + query : ''}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const data = await resp.json() as { items: unknown[] };
@@ -209,7 +250,12 @@ async function waitUntil(
 ): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (await condition()) return true;
+    try {
+      if (await condition()) return true;
+    } catch (err) {
+      // 一時的な通信の失敗で待ち全体を落とさず、次の確かめに進む（続けば時間切れで失敗になる）
+      console.warn(`[waitUntil] 確かめる処理が失敗したため、次の確かめに進みます: ${String(err)}`);
+    }
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
   return false;
@@ -315,6 +361,44 @@ async function waitForFlakyTestBarrier(): Promise<void> {
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
   await waitForQueueDrain(adminToken, TASK_TIMEOUT_MS);
 }
+
+/**
+ * opencode のテストユーザーのデフォルト CLI を opencode に、デフォルトモデルを指定の名前にする。
+ * Issue→MR 変換はデフォルトモデルを使うため、通したい経路（OpenAI か Claude か）をテストごとに決める。
+ *
+ * @param adminToken 管理者の JWT
+ * @param model デフォルトモデルにする名前
+ * @returns 変える前のデフォルトモデル
+ */
+async function setOpencodeUserModel(adminToken: string, model: string): Promise<string> {
+  const getResp = await apiFetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+  expect(getResp.status).toBe(200);
+  const previous = ((await getResp.json()) as { default_model: string }).default_model;
+  const putResp = await apiFetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${adminToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ default_cli: 'opencode', default_model: model }),
+  });
+  expect(putResp.status).toBe(200);
+  return previous;
+}
+
+/** opencode の OpenAI の経路で使う、テスト環境の既定のモデル名 */
+const OPENCODE_OPENAI_MODEL = process.env.DEFAULT_OPENAI_MODEL_LITELLM || 'openai/gpt-4o-mini';
+
+/**
+ * T-31・T-32 で opencode のテストユーザーに使わせるモデル名。
+ * モック LLM モードは OpenAI の経路を通すため OpenAI の既定のモデル、
+ * 実 LLM モードは Anthropic の API キーだけで流せるよう Claude のモデル（プロバイダ名なし）にする。
+ */
+const OPENCODE_SCENARIO_MODEL = process.env.LLM_MODE === 'real'
+  ? (process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001')
+  : OPENCODE_OPENAI_MODEL;
 
 // -----------------------------------------------------------------------
 // テスト前提条件チェック
@@ -542,7 +626,7 @@ test('T-13: 無効化ユーザーのIssueは処理されない', async () => {
   const disabledEmail = `disabled-${issueSuffix}@example.com`;
 
   // Backend にユーザー登録
-  const createResp = await fetch(`${BACKEND_URL}/api/users`, {
+  const createResp = await apiFetch(`${BACKEND_URL}/api/users`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -559,7 +643,7 @@ test('T-13: 無効化ユーザーのIssueは処理されない', async () => {
   expect([200, 201, 409]).toContain(createResp.status);
 
   // ユーザーを無効化（is_active = false）
-  const disableResp = await fetch(`${BACKEND_URL}/api/users/${disabledUsername}`, {
+  const disableResp = await apiFetch(`${BACKEND_URL}/api/users/${disabledUsername}`, {
     method: 'PUT',
     headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ is_active: false }),
@@ -762,6 +846,8 @@ test('T-31: testuser-opencodeのIssueをopencode CLIでMR変換できる', async
   const issueTitle = `[E2E T-31] opencode MR変換テスト ${issueSuffix}`;
 
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  // 通す経路のモデルを決める（前の実行が残したデフォルトモデルに左右されないようにする）
+  await setOpencodeUserModel(adminToken, OPENCODE_SCENARIO_MODEL);
 
   // 前のテスト（T-28/T-30）の CLI タスク（F-4）がコンシューマーキューに残っている場合、
   // T-31 の F-3 タスクが TASK_TIMEOUT_MS 以内に処理されず失敗する。
@@ -798,6 +884,8 @@ test('T-32: testuser-opencodeのMRをopencode CLIで処理できる', async () =
   await waitForFlakyTestBarrier();
   const projectId = GITLAB_PROJECT_ID;
   const issueSuffix = Date.now();
+  // 通す経路のモデルを決める（前の実行が残したデフォルトモデルに左右されないようにする）
+  await setOpencodeUserModel(await backendLogin('admin', ADMIN_PASSWORD), OPENCODE_SCENARIO_MODEL);
 
   // このテスト開始時刻以降に作成された MR のみを対象にする（stale MR 誤検知防止）
   const testStartTime = Date.now();
@@ -853,7 +941,7 @@ test('T-35: opencodeでプロバイダ名の付かないClaudeのモデル名を
 
   // testuser-opencode のデフォルト CLI を opencode にする（デフォルトモデルは問わない）
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
-  const ensureOpenCodeResp = await fetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
+  const ensureOpenCodeResp = await apiFetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${adminToken}`,
@@ -908,6 +996,46 @@ test('T-35: opencodeでプロバイダ名の付かないClaudeのモデル名を
   expect(recorded).toBe(true);
 });
 
+// -----------------------------------------------------------------------
+// T-36: opencode でプロバイダ名の付かない Claude のモデル名を使う Issue→MR 変換が完了する
+// -----------------------------------------------------------------------
+
+test('T-36: opencodeでプロバイダ名の付かないClaudeのモデル名を使うIssue→MR変換が完了する', async () => {
+  const projectId = GITLAB_PROJECT_ID;
+  const issueSuffix = Date.now();
+  // 本番の LiteLLM Proxy と同じく、プロバイダ名（anthropic/）を付けない名前を使う
+  const claudeModel = process.env.DEFAULT_CLAUDE_MODEL || 'claude-haiku-4-5-20251001';
+
+  const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
+  await waitForQueueDrain(adminToken, TASK_TIMEOUT_MS);
+
+  // Issue→MR 変換はデフォルトモデルを使うので、テストの間だけ Claude のモデルにする
+  const previousModel = await setOpencodeUserModel(adminToken, claudeModel);
+  try {
+    const issue = await createIssue(
+      projectId, GITLAB_USER_TOKEN_OPENCODE,
+      `[E2E T-36] opencode Claude MR変換テスト ${issueSuffix}`,
+      ISSUE_FILE_TASK_DESCRIPTION
+    );
+    await triggerIssue(projectId, issue.iid, GITLAB_ADMIN_TOKEN, GITLAB_BOT_NAME, GITLAB_BOT_LABEL);
+
+    // タスクが完了する（Issue→MR 変換のタスクには CLI とモデルが記録されないため、状態だけを見る）
+    const completed = await waitForTaskStatus(
+      adminToken, projectId, String(issue.iid), 'completed', TASK_TIMEOUT_MS
+    );
+    expect(completed).toBe(true);
+
+    // Issue に MR 作成のコメントが付いている
+    const commented = await waitForComment(
+      projectId, 'issues', issue.iid, GITLAB_ADMIN_TOKEN, 'MR', TASK_TIMEOUT_MS
+    );
+    expect(commented).toBe(true);
+  } finally {
+    // 後のテストに Claude のモデルを残さない
+    await setOpencodeUserModel(adminToken, previousModel);
+  }
+});
+
 test('T-33: Claude Code が docker-compose を使用できることを検証', async () => {
   // モック LLM は実際にファイルを作らず docker compose も動かさないため、実 LLM のモードでだけ確かめる
   test.skip(process.env.LLM_MODE !== 'real', '実 LLM のモードでだけ確かめる');
@@ -917,7 +1045,7 @@ test('T-33: Claude Code が docker-compose を使用できることを検証', a
 
   // T-33 は必ず Claude Code 経路で実行する
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
-  const ensureClaudeResp = await fetch(`${BACKEND_URL}/api/users/testuser-claude`, {
+  const ensureClaudeResp = await apiFetch(`${BACKEND_URL}/api/users/testuser-claude`, {
     method: 'PUT',
     headers: {
       Authorization: `Bearer ${adminToken}`,
@@ -986,18 +1114,7 @@ test('T-34: opencode が docker-compose を使用できることを検証', asyn
 
   // T-34 は必ず opencode 経路で実行する
   const adminToken = await backendLogin('admin', ADMIN_PASSWORD);
-  const ensureOpenCodeResp = await fetch(`${BACKEND_URL}/api/users/testuser-opencode`, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${adminToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      default_cli: 'opencode',
-      default_model: process.env.DEFAULT_OPENAI_MODEL_LITELLM || 'openai/gpt-4o-mini',
-    }),
-  });
-  expect(ensureOpenCodeResp.status).toBe(200);
+  await setOpencodeUserModel(adminToken, OPENCODE_OPENAI_MODEL);
 
   // このテスト開始時刻以降に作成された MR のみを対象にする
   const testStartTime = Date.now();

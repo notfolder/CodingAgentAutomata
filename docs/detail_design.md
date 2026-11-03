@@ -710,7 +710,7 @@ SOLID 原則への適合状況:
 | `DS-FN-CONTROL-CLI-PROCESS-FT-DETECT-TTY-WAIT` | CLI の処理の強制終了 | CLI コンテナの中の CLI の処理番号を調べて止める（TTY 入力待機検知のための部品で、どこからも使われていない） | `CLIContainerManager.get_container_pid`、`CLIContainerManager.kill_process` | `RQ-FT-DETECT-TTY-WAIT` |
 | `DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER` | CLI アダプタの解決 | CLI ID からアダプタ設定を取り、`env_mappings` で環境変数を、`config_content_env` があれば opencode 用の JSON（プロバイダの部分は opencode のプロバイダの設定の組み立てで作り、`mcp` を加える）を、`start_command_template` の `{model}` と `{mcp_config}` を展開して起動コマンドを作る（opencode のアダプタでは、`{model}` に opencode のプロバイダの判定でつないだ「プロバイダ/モデル」の名前を入れる）。全アダプタのイメージの一覧も返す | `CLIAdapterResolver.build_env_vars`、`CLIAdapterResolver.build_start_command`、`CLIAdapterResolver.fetch_all_container_images`、`CLIAdapterResolver.resolve` | `RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-BUILD-MCP-CONFIG` |
 | `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | opencode のプロバイダの判定 | モデル名を分ける: 空なら既定の `openai/gpt-4o-mini` を使う。最初の `/` があれば、前をプロバイダ、後ろをモデルとする。無ければ、名前が `claude-` で始まるときはプロバイダ `anthropic`、それ以外は `openai` とし、モデルは名前全体とする。つなぐ: 分けた結果を「プロバイダ/モデル」の 1 つの名前にする。起動コマンドの組み立ては、アダプタに設定の JSON を渡す環境変数があるとき（opencode のとき）だけ、`{model}` につないだ名前を入れる | `CLIAdapterResolver.split_opencode_model`、`CLIAdapterResolver.qualify_opencode_model` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
-| `DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | opencode のプロバイダの設定の組み立て | モデル名、LiteLLM Proxy の URL、Virtual Key から、opencode 用の JSON のうち `provider` と `small_model` を作る。プロバイダは opencode のプロバイダの判定で決める。`anthropic` なら、URL の末尾の `/` を取り除いて `/v1` を付け（すでに `/v1` で終わっていれば付けない）、`provider.anthropic.options` に `baseURL` と `apiKey`（Virtual Key。空なら入れない）を入れ、`small_model` に「プロバイダ/モデル」の形の名前を入れる。それ以外は `provider.<プロバイダ>.options.baseURL` に URL をそのまま入れ、`small_model` は入れない。CLI アダプタ設定は変えずに済む | `CLIAdapterResolver.build_opencode_provider_config` | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
+| `DS-FN-BUILD-OPENCODE-CONFIG` | opencode のプロバイダの設定の組み立て | モデル名、LiteLLM Proxy の URL、Virtual Key から、opencode 用の JSON のうち `provider` と `small_model` を作る。プロバイダは opencode のプロバイダの判定で決める。`anthropic` なら、URL の末尾の `/` を取り除いて `/v1` を付け（すでに `/v1` で終わっていれば付けない）、`provider.anthropic.options` に `baseURL` と `apiKey`（Virtual Key。空なら入れない）を入れる。それ以外は `provider.<プロバイダ>.options.baseURL` に URL をそのまま入れる。どのプロバイダでも、`small_model` に「プロバイダ/モデル」の形の名前（つなぐ処理の結果）を入れる。プロバイダによる分岐は宛先と Virtual Key の入れ方だけにし、`small_model` は分岐の外で 1 回だけ入れる。CLI アダプタ設定は変えずに済む | `CLIAdapterResolver.build_opencode_provider_config` | `RQ-FT-PASS-CLAUDE-CONNECTION-TO-OPENCODE`、`RQ-FT-USE-MAIN-MODEL-AS-OPENCODE-TITLE-MODEL`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION`、`RQ-NF-UPDATE-WITHOUT-MIGRATION-WORK` |
 | `DS-FN-BUILD-PROMPT-FT-BUILD-PROMPT` | プロンプトの生成 | F-3 は `{issue_title}`・`{issue_description}`・`{issue_comments}`・`{project_name}`・`{repository_url}`・`{existing_branches}`、F-4 は `{mr_description}`・`{mr_comments}`・`{branch_name}`・`{repository_url}` を展開する。F-4 はユーザー個別のテンプレートを優先し、テンプレートに無い必須の情報を末尾に補う | `PromptBuilder.build_f3_prompt`、`PromptBuilder.build_f4_prompt` | `RQ-FT-BUILD-PROMPT` |
 | `DS-FN-REPORT-PROGRESS-FT-REPORT-PROGRESS` | 進捗報告 | CLI の出力を 1 行ずつ溜め（stream-json は読める文に直す）、`PROGRESS_REPORT_INTERVAL_SEC` ごとに MR の 1 件のコメントを作成・更新する。直近 `PROGRESS_REPORT_SUMMARY_LINES` 行と全体のログ（最大 `PROGRESS_REPORT_BUFFER_MAX_LINES` 行）を出す。3 回続けて失敗したら更新をやめる | `ProgressManager.append_line`、`ProgressManager.decode_stream_json_line`、`ProgressManager.flush`、`ProgressManager.start`、`ProgressManager.stop` | `RQ-FT-REPORT-PROGRESS`、`RQ-UI-GITLAB-COMMENTS` |
 | `DS-FN-MASK-CLI-LOG-FT-MASK-CLI-LOG` | CLI ログのマスク | URL に埋め込まれたトークン（`oauth2:TOKEN@` と `TOKEN@`）を `****` に置き換える | `CLILogMasker.mask` | `RQ-FT-MASK-CLI-LOG`、`RQ-FT-PROTECT-GITLAB-PAT` |
@@ -731,7 +731,7 @@ SOLID 原則への適合状況:
 | `DS-FN-MANAGE-CLI-ADAPTERS-FT-MANAGE-CLI-ADAPTERS` | CLI アダプタ管理 | 一覧（CLI ID の順）・追加（ID の重複は 409）・更新・削除（組み込みとユーザーが使用中のものは 400） | `CLIAdapterRepository.create`、`CLIAdapterRepository.delete`、`CLIAdapterRepository.get_all`、`CLIAdapterRepository.get_by_id`、`CLIAdapterRepository.is_referenced_by_users`、`CLIAdapterRepository.update`、`CLIAdapterService.create_adapter`、`CLIAdapterService.delete_adapter`、`CLIAdapterService.list_adapters`、`CLIAdapterService.update_adapter` | `RQ-FT-MANAGE-CLI-ADAPTERS`、`RQ-FT-RESTRICT-ADAPTER-DELETE` |
 | `DS-FN-MANAGE-SYSTEM-SETTINGS-FT-MANAGE-SYSTEM-SETTINGS` | システム設定の管理 | キーと値の表とレスポンスの変換、部分更新（文字列以外は JSON にして保存） | `SystemSettingsRepository.get`、`SystemSettingsRepository.get_all`、`SystemSettingsRepository.set`、`SystemSettingsRepository.upsert_many`、`SystemSettingsService.get_settings`、`SystemSettingsService.update_settings` | `RQ-FT-MANAGE-SYSTEM-SETTINGS` |
 | `DS-FN-SETUP-INITIAL-DATA-FT-SETUP-INITIAL-DATA` | 初期データの投入 | 組み込みの CLI アダプタ（claude・opencode）の登録と上書き、F-3・F-4 のテンプレートの投入（既にあれば上書きしない）、最初の管理者の作成を 1 回のコミットで行う。引数が無ければ対話で聞く | `main`、`setup` | `RQ-FT-SETUP-INITIAL-DATA`、`RQ-UI-SETUP-CMD` |
-| `DS-FN-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | 旧版の GitLab セットアップ | テスト用の GitLab の準備の旧版（どこからも呼ばれていない） | `create_root_pat`、`get_root_token`、`main`、`save_env_test`、`setup_backend`、`setup_gitlab_bot`、`setup_gitlab_test_users`、`setup_group_webhook`、`setup_test_group`、`setup_test_project`、`wait_for_gitlab` | `RQ-FT-SETUP-TEST-ENVIRONMENT` |
+| `DS-FN-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | 旧版の GitLab セットアップ | テスト用の GitLab の準備の旧版（どこからも呼ばれていない） | `create_root_pat`、`get_root_token`、`main`、`save_env_test`、`setup_backend`、`setup_gitlab_bot`、`setup_gitlab_test_users`、`setup_group_webhook`、`setup_test_group`、`setup_test_project`、`wait_for_gitlab` | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE` |
 | `DS-FN-MEASURE-CLI-CONTAINER-START-FT-MEASURE-CLI-CONTAINER-STARTUP` | CLI コンテナの起動時間の計測 | Docker SDK と CLI で、run・create と start・削除の各段階の時間を測る | `main`、`test_containers_run`、`test_containers_run_sleep`、`test_create_start`、`test_create_start_while_dind_running`、`test_create_with_auto_remove`、`test_docker_cli`、`test_remove_running_dind`、`test_run_immediately_after_dind_remove`、`test_run_while_dind_running`、`test_run_with_existing_running_container` | `RQ-FT-MEASURE-CLI-CONTAINER-STARTUP` |
 | `DS-FN-SERVE-MOCK-LLM-FT-PROVIDE-MOCK-LLM` | モック LLM の応答 | OpenAI 互換（chat/completions・models・responses）、Anthropic 互換（messages。ストリーミングあり）、LiteLLM のキー管理（key/generate・key/info・key/delete）の真似。F-3 の指示には固定のブランチ名と MR のタイトルの JSON を返す | `MockLLMHandler.do_GET`、`MockLLMHandler.do_POST`、`MockLLMHandler.log_message`、`main` | `RQ-FT-PROVIDE-MOCK-LLM` |
 | `DS-FN-CALL-BACKEND-API-FT-MANAGE-USERS` | 管理画面からの API の呼び出し | `/api` を基点に、JWT を付けて backend の API を呼ぶ。401 ならログアウトしてログイン画面へ移る | `apiLogin`、`createAdapter`、`createUser`、`deleteAdapter`、`deleteUser`、`getAdapters`、`getModelCandidates`、`getSettings`、`getTasks`、`getUser`、`getUsers`、`updateAdapter`、`updateSettings`、`updateUser`、`updateUserSelf` | `RQ-FT-MANAGE-USERS`、`RQ-UI-AUTH-API`、`RQ-UI-USER-API`、`RQ-UI-TASK-API`、`RQ-UI-CLI-ADAPTER-API`、`RQ-UI-SETTINGS-API` |
@@ -956,7 +956,7 @@ Zscaler 環境対応で足すディレクトリ:
 | `zscaler-mock/` | 模擬プロキシの compose プロジェクト |
 | `zscaler-mock/.data/` | mitmproxy の認証局。git 管理外 |
 | `tests/consumer/`・`tests/scripts/` | 単体テスト・結合テスト |
-| `e2e/zscaler/` | Zscaler の E2E |
+| `e2e/zscaler/` | ホストから確かめる E2E（Zscaler、GitLab の URL、テスト環境の構築、LiteLLM Proxy のログ） |
 
 
 ### 7-2. ファイル一覧
@@ -989,7 +989,7 @@ Zscaler 環境対応で足すディレクトリ:
 | `DS-MD-BACKEND-TASK-SERVICE-FT-LIST-TASK-HISTORY` | `backend/services/task_service.py` | タスクの一覧 | `DS-CL-TASK-SERVICE-FT-LIST-TASK-HISTORY`、`DS-FN-LIST-TASKS-FT-LIST-TASK-HISTORY` | `RQ-FT-LIST-TASK-HISTORY` |
 | `DS-MD-BACKEND-USER-SERVICE-FT-MANAGE-USERS` | `backend/services/user_service.py` | ユーザー管理の業務ロジック | `DS-CL-USER-SERVICE-FT-MANAGE-USERS`、`DS-FN-MANAGE-USERS-FT-MANAGE-USERS` | `RQ-FT-MANAGE-USERS`、`RQ-FT-VALIDATE-USER-INPUT`、`RQ-FT-VALIDATE-LLM-KEY` |
 | `DS-MD-BACKEND-VIRTUAL-KEY-SERVICE-FT-ENCRYPT-VIRTUAL-KEY` | `backend/services/virtual_key_service.py` | Virtual Key の暗号化と復号 | `DS-CL-BACKEND-VIRTUAL-KEY-SERVICE-FT-ENCRYPT-VIRTUAL-KEY`、`DS-FN-CRYPT-VIRTUAL-KEY-FT-ENCRYPT-VIRTUAL-KEY` | `RQ-FT-ENCRYPT-VIRTUAL-KEY` |
-| `DS-MD-CONSUMER-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py` | CLI アダプタの解決 | `DS-CL-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | `RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-MD-CONSUMER-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER` | `consumer/cli_adapter_resolver.py` | CLI アダプタの解決 | `DS-CL-CLI-ADAPTER-RESOLVER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-RESOLVE-CLI-ADAPTER-FT-RESOLVE-CLI-ADAPTER`、`DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`DS-FN-BUILD-OPENCODE-CONFIG` | `RQ-FT-RESOLVE-CLI-ADAPTER`、`RQ-FT-PASS-CLAUDE-CONNECTION-TO-OPENCODE`、`RQ-FT-USE-MAIN-MODEL-AS-OPENCODE-TITLE-MODEL`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
 | `DS-MD-CONSUMER-CLI-CONTAINER-MANAGER-FT-RUN-CLI-CONTAINER` | `consumer/cli_container_manager.py` | CLI コンテナの管理 | `DS-CL-CLI-CONTAINER-MANAGER-FT-RUN-CLI-CONTAINER`、`DS-FN-CONTROL-CLI-PROCESS-FT-DETECT-TTY-WAIT`、`DS-FN-RUN-CLI-CONTAINER-FT-RUN-CLI-CONTAINER` | `RQ-FT-RUN-CLI-CONTAINER`、`RQ-FT-DETECT-TTY-WAIT`、`RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` |
 | `DS-MD-CONSUMER-CLI-LOG-MASKER-FT-MASK-CLI-LOG` | `consumer/cli_log_masker.py` | CLI ログのマスク | `DS-CL-CLI-LOG-MASKER-FT-MASK-CLI-LOG`、`DS-FN-MASK-CLI-LOG-FT-MASK-CLI-LOG` | `RQ-FT-MASK-CLI-LOG` |
 | `DS-MD-CONSUMER-ENTRY-FT-GRACEFUL-SHUTDOWN` | `consumer/consumer.py` | consumer の起動と停止 | `DS-CL-CONSUMER-WORKER-FT-GRACEFUL-SHUTDOWN`、`DS-FN-START-CONSUMER-FT-GRACEFUL-SHUTDOWN` | `RQ-FT-GRACEFUL-SHUTDOWN`、`RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` |
@@ -1021,13 +1021,13 @@ Zscaler 環境対応で足すディレクトリ:
 | `DS-MD-PRODUCER-WEBHOOK-SERVER-FT-RECEIVE-WEBHOOK` | `producer/webhook_server.py` | Webhook の受信と死活確認 | `DS-CL-WEBHOOK-SERVER-FT-RECEIVE-WEBHOOK`、`DS-FN-RECEIVE-WEBHOOK-FT-RECEIVE-WEBHOOK` | `RQ-FT-RECEIVE-WEBHOOK`、`RQ-EX-GITLAB-WEBHOOK`、`RQ-UI-HEALTH-API` |
 | `DS-MD-SCRIPTS-BUILD-CLI-EXEC-FT-BUILD-CLI-IMAGES` | `scripts/build_cli_exec.sh` | CLI イメージのビルド | — | `RQ-FT-BUILD-CLI-IMAGES`、`RQ-UI-BUILD-CLI-EXEC-CMD`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD`、`RQ-FT-RUN-STANDARD-BROWSERS-CLI-CONTAINER` |
 | `DS-MD-SCRIPTS-DEBUG-DOCKER-RUN-FT-MEASURE-CLI-CONTAINER-STARTUP` | `scripts/debug_docker_run.py` | CLI コンテナの起動時間の計測（開発用の道具） | `DS-FN-MEASURE-CLI-CONTAINER-START-FT-MEASURE-CLI-CONTAINER-STARTUP` | `RQ-FT-MEASURE-CLI-CONTAINER-STARTUP` |
-| `DS-MD-SCRIPTS-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `scripts/gitlab_setup.py` | テスト用の GitLab の準備の旧版（開発用の道具。未使用） | `DS-FN-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT` |
+| `DS-MD-SCRIPTS-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `scripts/gitlab_setup.py` | テスト用の GitLab の準備の旧版（開発用の道具。未使用） | `DS-FN-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE` |
 | `DS-MD-SCRIPTS-ISDD-CHECK-SH-FT-CHECK-TRACEABILITY` | `scripts/isdd/check.sh` | 対応表チェックの入口（isdd-setup が生成） | — | `RQ-FT-CHECK-TRACEABILITY` |
 | `DS-MD-SCRIPTS-ISDD-COMPLETENESS-CHECKER-FT-CHECK-TRACEABILITY` | `scripts/isdd/implementation_completeness_checker.py` | 実装完了チェッカー（isdd-setup が複製） | `DS-FN-CHECK-IMPLEMENTATION-COMPLETENESS-FT-CHECK-TRACEABILITY` | `RQ-FT-CHECK-TRACEABILITY` |
 | `DS-MD-SCRIPTS-ISDD-TRACE-MAP-CHECKER-FT-CHECK-TRACEABILITY` | `scripts/isdd/trace_map_checker.py` | 対応表チェッカー（isdd-setup が複製） | `DS-CL-CODE-SYMBOLS-FT-CHECK-TRACEABILITY`、`DS-CL-TRACE-MAP-CHECKER-FT-CHECK-TRACEABILITY`、`DS-FN-CHECK-TRACE-MAP-FT-CHECK-TRACEABILITY` | `RQ-FT-CHECK-TRACEABILITY` |
 | `DS-MD-SCRIPTS-SETUP-PY-FT-SETUP-INITIAL-DATA` | `scripts/setup.py` | 初期データの投入 | `DS-FN-SETUP-INITIAL-DATA-FT-SETUP-INITIAL-DATA` | `RQ-FT-SETUP-INITIAL-DATA` |
 | `DS-MD-SCRIPTS-SETUP-SH-FT-SETUP-INITIAL-DATA` | `scripts/setup.sh` | 初期セットアップの入口（CLI イメージのビルドと初期データの投入） | — | `RQ-FT-SETUP-INITIAL-DATA`、`RQ-UI-SETUP-CMD`、`RQ-FT-REQUIRE-ZSCALER-SETTINGS` |
-| `DS-MD-SCRIPTS-TEST-SETUP-SH-FT-SETUP-TEST-ENVIRONMENT` | `scripts/test_setup.sh` | テスト環境の一括構築と E2E の実行 | — | `RQ-FT-SETUP-TEST-ENVIRONMENT`、`RQ-UI-TEST-SETUP-CMD`、`RQ-UI-TEST-SETUP-ZSCALER-MOCK-OPTION`、`RQ-FT-RUN-ZSCALER-MOCK-PROXY`、`RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` |
+| `DS-MD-SCRIPTS-TEST-SETUP-SH-FT-SETUP-TEST-ENVIRONMENT` | `scripts/test_setup.sh` | テスト環境の一括構築と E2E の実行 | — | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE`、`RQ-UI-TEST-SETUP-CMD`、`RQ-UI-TEST-SETUP-ZSCALER-MOCK-OPTION`、`RQ-FT-RUN-ZSCALER-MOCK-PROXY`、`RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` |
 | `DS-MD-SCRIPTS-VERIFY-DIND-WARMUP-FT-MEASURE-CLI-CONTAINER-STARTUP` | `scripts/verify_dind_warmup.sh` | CLI コンテナのウォームアップの効果の計測（開発用の道具） | — | `RQ-FT-MEASURE-CLI-CONTAINER-STARTUP` |
 | `DS-MD-SHARED-PACKAGE-UI-ENV-SETTINGS` | `shared/__init__.py` | shared パッケージ | — | `RQ-UI-ENV-SETTINGS` |
 | `DS-MD-SHARED-CONFIG-PACKAGE-UI-ENV-SETTINGS` | `shared/config/__init__.py` | config パッケージ | — | `RQ-UI-ENV-SETTINGS` |
@@ -1058,6 +1058,9 @@ Zscaler 環境対応で足すディレクトリ:
 | 設定・DB・GitLab・キューのクライアント、ORM モデル、停止の要求 | `shared/` |
 | CLI エージェントごとの違い | CLI アダプタ設定（DB）と CLIAdapterResolver |
 | opencode のモデル名の判定・つなぎと、LiteLLM Proxy の URL への `/v1` の付加 | CLIAdapterResolver の静的メソッド（判定は `split_opencode_model`、つなぎは `qualify_opencode_model` の 1 か所ずつで、起動コマンドと設定の JSON の両方が使う。`/v1` は opencode の Anthropic の形式のときだけ付け、Claude Code 用の `ANTHROPIC_BASE_URL` には付けない） |
+| ホストの pytest から docker の CLI で確かめる E2E | `e2e/zscaler/`（Zscaler の E2E と、GitLab の URL・テスト環境の構築・LiteLLM Proxy のログの E2E が、`conftest.py` の共通処理を使う） |
+| opencode のテストユーザーのデフォルトモデルの切り替え | `e2e/tests/gitlab_integration.spec.ts` の `setOpencodeUserModel`（T-31・T-32・T-34・T-36 が使う） |
+| E2E から GitLab と backend の API を呼ぶ処理（失敗時の URL の表示と、読み取りの要求のやり直し） | `e2e/tests/gitlab_integration.spec.ts` の `apiFetch`（このファイルのすべての API の呼び出しが使う） |
 | Virtual Key の暗号化と復号 | backend と consumer に同じ実装がある（共通化されていない） |
 
 Zscaler 環境対応の共通化:
@@ -1116,7 +1119,7 @@ Zscaler 環境対応の共通化:
 | `DS-TS-NO-DUPLICATE-PROCESSING-E2E-TS-VERIFY-NO-DUPLICATE-PROCESSING` | `e2e/tests/gitlab_integration.spec.ts（T-24）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-NO-DUPLICATE-PROCESSING` |
 | `DS-TS-NO-TLS-VERIFY-DISABLE-NF-TLS-VERIFICATION-ALWAYS-ON` | 単体・結合テスト | リポジトリ全体（`node_modules`、仮想環境、`.history/`、`docs/`、このテスト自身を除く）に、6-2 の証明書の検証を無効にする設定が無いことを確かめる単体テスト | `RQ-NF-TLS-VERIFICATION-ALWAYS-ON` |
 | `DS-TS-NON-TARGET-EVENTS-E2E-TS-VERIFY-NON-TARGET-EVENTS` | `e2e/tests/gitlab_integration.spec.ts（T-10〜T-13）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-NON-TARGET-EVENTS` |
-| `DS-TS-OPENCODE-CLI-E2E-TS-VERIFY-OPENCODE-CLI` | `e2e/tests/gitlab_integration.spec.ts（T-31・T-32）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-OPENCODE-CLI` |
+| `DS-TS-OPENCODE-CLI-E2E-TS-VERIFY-OPENCODE-CLI` | `e2e/tests/gitlab_integration.spec.ts（T-31・T-32）` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり）。各テストの最初に、opencode のテストユーザーのデフォルト CLI を `opencode` にし、デフォルトモデルを決める（前の実行が残した値に左右されないため）。モック LLM モードは OpenAI の既定のモデル（`DEFAULT_OPENAI_MODEL_LITELLM`、既定 `openai/gpt-4o-mini`）、実 LLM モードは Anthropic の API キーだけで流せるよう `DEFAULT_CLAUDE_MODEL`（既定 `claude-haiku-4-5-20251001`。プロバイダ名を付けない）にする | `RQ-TS-VERIFY-OPENCODE-CLI` |
 | `DS-TS-OPENCODE-UNPREFIXED-CLAUDE-E2E-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL` | `e2e/tests/gitlab_integration.spec.ts（T-35）` | 前提: `testuser-opencode` のデフォルト CLI を opencode にしておく。手順: 管理者の PAT で main から作業ブランチを作り、`testuser-opencode` の PAT でその Draft MR を作る。説明文は MR 処理用の作業指示に `agent: cli=opencode model=<DEFAULT_CLAUDE_MODEL。既定 claude-haiku-4-5-20251001。プロバイダ名を付けない>` の行を足したもの。MR に bot をアサインし特定ラベルを付ける。期待結果: 完了コメントが付き、backend のタスクの一覧でその MR のタスクの CLI が `opencode`、モデルが書いたままの名前、状態が完了。モック LLM モードと実 LLM モードの両方で成功する。Issue→MR 変換を経ないのは、実 LLM モードで OpenAI の API キーを要らなくするため | `RQ-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL`、`RQ-EX-USE-LOCAL-HTTP-MOCK` |
 | `DS-TS-OS-BUNDLE-FALLBACK-TS-VERIFY-OS-BUNDLE-FALLBACK` | 証明書ファイルが無いときホストの OS の束を使う | 前提: 模擬プロキシが起動している。手順: 一時ディレクトリを `--project-dir` にし、証明書ファイルなし、`--host-bundle` に模擬の認証局を足した束を渡して、`ZSCALER_PROXY_URL=http://127.0.0.1:18080` で準備処理を実行する。期待結果: 終了コード 0、生成物の `extra-ca.pem` と `ca-bundle.pem` がその束と同じ内容 | `RQ-TS-VERIFY-OS-BUNDLE-FALLBACK` |
 | `DS-TS-PROMPT-TEMPLATES-E2E-TS-VERIFY-PROMPT-TEMPLATES` | `e2e/tests/prompt_templates.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-PROMPT-TEMPLATES` |
@@ -1130,7 +1133,11 @@ Zscaler 環境対応の共通化:
 | `DS-TS-WEBHOOK-RECEIVE-E2E-TS-VERIFY-WEBHOOK-RECEIVE` | `e2e/tests/group_webhook.spec.ts` | 要件定義書 7 章の同じ名前のシナリオを、このファイルの Playwright のテストで確かめる（目的・前提・手順・期待結果は要件定義書のとおり） | `RQ-TS-VERIFY-WEBHOOK-RECEIVE`、`RQ-NF-WEBHOOK-ENQUEUE-3S` |
 | `DS-TS-ZSCALER-SCRIPT-TESTS-FT-REQUIRE-ZSCALER-SETTINGS` | 単体・結合テスト | 準備処理の単体・結合テスト（スイッチの値の判定、宛先の形、証明書の決め方、除外宛先、生成物の中身、エラー時に生成物を書き換えないこと） | `RQ-FT-REQUIRE-ZSCALER-SETTINGS`、`RQ-FT-RESOLVE-CERT-BUNDLE`、`RQ-FT-BUILD-NO-PROXY-LIST` |
 | `DS-TS-ZSCALER-UNIT-TESTS-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` | 単体・結合テスト | ZscalerSettings（有効・無効・値なし）、PromptBuilder（F-3、F-4 のシステム設定、F-4 のユーザー個別、無効時に足さない）、CLIContainerManager（環境変数の優先順位、追加のホスト名）の単体テスト | `RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER`、`RQ-FT-INSTRUCT-CLI-ZSCALER` |
-| `DS-TS-OPENCODE-MODEL-NAME-UNIT-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | 単体テスト | `tests/consumer/test_cli_adapter_resolver_opencode.py`。判定（`claude-opus-5-5`→`anthropic`、`gpt-5.5`→`openai`、`/` 付きは書いたまま、空→既定、`litellm/org/model`→最初の `/` で分ける）、つなぎ（各名前が「プロバイダ/モデル」になる）、起動コマンド（opencode では `--model` がつないだ名前、Claude Code は書いたまま）、設定の JSON（`/` の有無にかかわらず `anthropic` なら `/v1` 付きの `baseURL`・`apiKey`・つないだ `small_model`。`/v1` が二重にならない。`openai` では既存と同じ JSON）、`build_env_vars`（opencode で JSON と `OPENAI_API_KEY` の両方。Claude Code の出力は変わらない） | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-TS-OPENCODE-RESOLVER-UNIT` | 単体テスト | `tests/consumer/test_cli_adapter_resolver_opencode.py`。判定（`claude-opus-5-5`→`anthropic`、`gpt-5.5`→`openai`、`/` 付きは書いたまま、空→既定、`litellm/org/model`→最初の `/` で分ける）、つなぎ（各名前が「プロバイダ/モデル」になる）、起動コマンド（opencode では `--model` がつないだ名前、Claude Code は書いたまま）、設定の JSON（`/` の有無にかかわらず `anthropic` なら `/v1` 付きの `baseURL`・`apiKey`・つないだ `small_model`。`/v1` が二重にならない。`openai` では `baseURL` が URL のままで、`small_model` が `openai/gpt-5.5` などのつないだ名前。`litellm/org/model` でも `small_model` が入る）、`build_env_vars`（opencode で JSON と `OPENAI_API_KEY` の両方。Claude Code の出力は変わらない） | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-FT-PASS-CLAUDE-CONNECTION-TO-OPENCODE`、`RQ-FT-USE-MAIN-MODEL-AS-OPENCODE-TITLE-MODEL`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-TS-GITLAB-URL-FROM-ENV-E2E` | `e2e/zscaler/test_runtime_settings_e2e.py` | 本番の状態とテスト環境で、producer と consumer に渡る GitLab の URL を確かめる。前提: ホストで docker の CLI が使える。手順: 一時ディレクトリに `docker-compose.yml` を写し、`GITLAB_API_URL=https://gitlab.example.invalid` だけを書いた `.env` と、空の `.zscaler/zscaler.env` を置く。① `.env.test` を置かずに `docker compose --project-directory <一時ディレクトリ> config --format json` で構成を展開する（起動はしない）。② `GITLAB_API_URL=http://gitlab:8929` を書いた `.env.test` を置いてもう一度展開する。期待結果: ① では producer と consumer の `GITLAB_API_URL` が `https://gitlab.example.invalid` で、test_playwright・test_playwright_real には `GITLAB_API_URL` が無い。② では 4 つとも `http://gitlab:8929` | `RQ-TS-VERIFY-GITLAB-URL-FROM-ENV` |
+| `DS-TS-TEST-SETUP-REPEATABLE-E2E` | `e2e/zscaler/test_runtime_settings_e2e.py` | テスト環境の構築を続けて実行しても同じ状態になる。前提: テスト環境の構築を一度実行済み。手順: `./scripts/test_setup.sh --run-tests` を実行する（2 回目の構築と E2E）。ホストの E2E で、test_setup.sh が構築の最初に取って環境変数で渡した `.env` のハッシュと今の `.env` のハッシュが同じことと、`.env.test` の `GITLAB_API_URL` が `http://gitlab:8929` であることを確かめる。期待結果: 2 回目の構築が終了コード 0 で終わり、`.env` のハッシュが同じで、Playwright の E2E がすべて通る。ハッシュが渡されていない（単独で実行した）ときは飛ばす | `RQ-TS-VERIFY-TEST-SETUP-REPEATABLE` |
+| `DS-TS-OPENCODE-NO-UNKNOWN-MODEL-CALL-E2E` | `e2e/zscaler/test_runtime_settings_e2e.py` | opencode の実行で、LiteLLM Proxy に無いモデルの呼び出しが起きない。前提: テスト環境（モック LLM モード）。test_setup.sh が Playwright の E2E を始める直前の時刻（UTC）と LiteLLM Proxy のサービス名（`litellm` か `litellm_real`）を環境変数で渡す。T-31・T-32 は、モック LLM モードでは opencode のテストユーザーのデフォルトモデルを OpenAI の既定のモデルにしてから流す。手順: Playwright の E2E（OpenAI の経路の T-31（Issue→MR 変換）・T-32（MR 処理）、Claude の経路の T-36（Issue→MR 変換）・T-35（MR 処理））の後に、`docker compose logs --since <開始時刻> <LiteLLM Proxy のサービス>` を読む。期待結果: `Invalid model name passed in model=` を含む行が 0 件。見つかったら、その行を失敗の内容に出す。環境変数が無いときは飛ばす | `RQ-TS-VERIFY-OPENCODE-NO-UNKNOWN-MODEL-CALL` |
+| `DS-TS-OPENCODE-CLAUDE-ISSUE-TO-MR-E2E` | `e2e/tests/gitlab_integration.spec.ts` | T-36。opencode で、プロバイダ名の付かない Claude のモデル名を使う Issue→MR 変換が完了する。前提: テスト環境（モック LLM モードと実 LLM モード）。手順: ① キューが空になるのを待つ。② opencode のテストユーザーのデフォルト CLI を `opencode`、デフォルトモデルを `DEFAULT_CLAUDE_MODEL`（既定 `claude-haiku-4-5-20251001`。プロバイダ名を付けない）にし、変える前の値を控える。③ そのユーザーで Issue を作り、bot とラベルを付ける。④ タスクの完了と、Issue の MR 作成のコメントを待つ。⑤ 成否にかかわらず、デフォルトモデルを控えた値に戻す。期待結果: タスクが完了し、Issue に MR 作成のコメントが付き、テストの後にデフォルトモデルが元に戻っている（Issue→MR 変換のタスクには CLI とモデルが記録されないので、記録は確かめない） | `RQ-TS-VERIFY-OPENCODE-NO-UNKNOWN-MODEL-CALL` |
 
 外部連携のモードは、モック LLM を使う既定のモード（プロファイル test）と、実際の LLM を使う real のモード（プロファイル test-real）の 2 つ。CLI コンテナの中の docker compose のシナリオは real のモードだけで通る。
 
@@ -1144,6 +1151,8 @@ Web の GUI の E2E は Playwright（`@playwright/test` 1.59 系、実行コン�
 |---|---|
 | モック LLM のモード | `./scripts/test_setup.sh --run-tests` |
 | real のモード（手動） | `./scripts/test_setup.sh --real --run-tests` |
+
+`e2e/tests/gitlab_integration.spec.ts` の GitLab と backend の API の呼び出しは、共通の関数 `apiFetch` を通す。通信が失敗したら、メソッドと URL を入れたエラーにする（どちらのサーバーとの通信かを分かるようにするため。URL にトークンは入れない）。相手が接続を切った（`UND_ERR_SOCKET`）ときは、読み取りの要求（GET・HEAD）だけ 1 回やり直す（使い回した接続を相手が先に閉じていることがあるため。作成・更新の要求は二重に行うおそれがあるので、やり直さない）。状態を待つ関数 `waitUntil` は、確かめる処理が例外を出しても警告を出して次の確かめに進み、時間切れまで続いたときだけ失敗にする。
 
 テスト資産は `e2e/` に置く。実行の前後に、キューを空にし、テスト用の GitLab の残りを片付ける。実行の後に、テストが作ったユーザー（名前が決まった接頭辞で始まるもの）を backend の API で消す。各テストは使うユーザーを自分で作り、ほかのテストの結果に頼らない。失敗したら修正と再実行を全件成功まで繰り返す。
 
@@ -1182,7 +1191,7 @@ docker compose --profile test run --rm unit_test
 | 模擬プロキシを使う E2E（モック LLM） | `./scripts/test_setup.sh --zscaler-mock --run-tests` |
 | 模擬プロキシを使う E2E（実 LLM。手動で実行する） | `./scripts/test_setup.sh --zscaler-mock --real --run-tests` |
 
-`--run-tests` は、既存の Playwright の E2E の後に、模擬プロキシの有無によらず `e2e/zscaler/` の pytest も実行する。各シナリオは、生成物の状態（`.zscaler/state`）、模擬プロキシの起動の有無、実 LLM のモードかで、実行するかを決める（無効のスイッチと標準のブラウザのシナリオは、Zscaler 設定が無効のときにしか確かめられないため）。実装時の必須ゴールは、上の 1 行目と 2 行目の全件通過とする。3 行目は API キーと費用が要るので、手動の実行を必須にする。テストが失敗したら、修正と再実行を全件成功まで繰り返す。
+`--run-tests` は、既存の Playwright の E2E の後に、模擬プロキシの有無によらず `e2e/zscaler/` の pytest（ホストから確かめる E2E）も実行する。このとき、構築の最初に取った `.env` のハッシュ、Playwright の E2E を始めた時刻、LiteLLM Proxy のサービス名を環境変数で渡す。各シナリオは、生成物の状態（`.zscaler/state`）、模擬プロキシの起動の有無、実 LLM のモードかで、実行するかを決める（無効のスイッチと標準のブラウザのシナリオは、Zscaler 設定が無効のときにしか確かめられないため）。実装時の必須ゴールは、上の 1 行目と 2 行目の全件通過とする。3 行目は API キーと費用が要るので、手動の実行を必須にする。テストが失敗したら、修正と再実行を全件成功まで繰り返す。
 
 ---
 
@@ -1199,10 +1208,12 @@ docker compose --profile test run --rm unit_test
 | `DS-OP-CLI-EXTRA-SETUP-MIGRATION-NF-CLI-EXTRA-SETUP-MIGRATION` | Zscaler 環境対応 | README と要件の例の追加環境の構築コマンドを、apt の書き方（例: `apt-get update && apt-get install -y --no-install-recommends golang ruby`）にする。旧い apk の書き方は失敗することを書く | `RQ-NF-CLI-EXTRA-SETUP-MIGRATION` |
 | `DS-OP-COMPONENT-DOCKERFILES-OP-HEALTH-MONITORING` | 部品のイメージ | backend・producer・consumer・mock-llm は `python:3.12-slim` に shared と各部品を入れる。起動コマンドは backend が uvicorn の 8000 番、producer と consumer が `python -m`、mock-llm が `python server.py` | `RQ-OP-HEALTH-MONITORING`、`RQ-FT-MIGRATE-DB-ON-STARTUP` |
 | `DS-OP-COMPOSE-SERVICES-FT-RUN-CLI-CONTAINER` | compose の構成 | `docker-compose.yml`。サービス、プロファイル（なし・test・test-real・build-only）、ネットワーク `codingagent_net`、ボリューム、`restart: always`、consumer への `docker.sock` のマウント。consumer の台数で同時処理数を増やす | `RQ-FT-RUN-CLI-CONTAINER`、`RQ-NF-CONCURRENT-TASKS`、`RQ-OP-HEALTH-MONITORING`、`RQ-UI-ENV-SETTINGS` |
+| `DS-OP-COMPOSE-GITLAB-URL` | GitLab の URL | `docker-compose.yml` の `environment` では `GITLAB_API_URL` を置き換えない。producer と consumer は `env_file` の `.env`、続いて `.env.test`（テスト環境だけにある）の値を使う。test_playwright・test_playwright_real は `.env.test` の値を使う | `RQ-FT-USE-GITLAB-URL-FROM-ENV` |
 | `DS-OP-COMPOSE-ZSCALER-RUNTIME-FT-APPLY-ZSCALER-SETTINGS-RUNTIME` | Zscaler 環境対応 | `docker-compose.yml`: ① 自前のイメージのすべてのビルドに、追加のビルドコンテキスト `zscaler: ./.zscaler`、ビルド引数のプロキシの宛先と除外宛先、追加のホスト名 `host.docker.internal:host-gateway` を付ける（ホストネットワークは使わない）。② backend・producer・consumer・litellm_real・test_playwright・test_playwright_real に、環境変数ファイル `.zscaler/zscaler.env` と追加のホスト名 `host.docker.internal:host-gateway` を付ける。③ litellm_real に証明書の束を `/etc/zscaler/ca-bundle.pem` へ読み取り専用でマウントし、`SSL_CERT_FILE` をそこへ向け、`AIOHTTP_TRUST_ENV=True` を設定する。④ test_playwright・test_playwright_real に同じ束をマウントし、`NODE_EXTRA_CA_CERTS` をそこへ向ける。⑤ build-only のプロファイルに `cli_exec_base` を足し、Claude Code 用と opencode 用は追加のビルドコンテキスト `base: service:cli_exec_base` で土台を使う。⑥ test のプロファイルに `unit_test` を足す | `RQ-FT-APPLY-ZSCALER-SETTINGS-RUNTIME`、`RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
 | `DS-OP-DEFAULT-TEMPLATES-FT-SETUP-INITIAL-DATA` | 既定のテンプレート | `default-template/f3_prompt_template.md`（ブランチ名と MR のタイトルを JSON で出させる）と `f4_prompt_template.md` | `RQ-FT-SETUP-INITIAL-DATA` |
 | `DS-OP-DOCKERFILE-ZSCALER-BUILD-FT-APPLY-ZSCALER-SETTINGS-BUILD` | Zscaler 環境対応 | backend・producer・consumer・frontend（ビルド段）の Dockerfile の、外へ出る最初の処理の前に、追加のビルドコンテキスト `zscaler` をマウントした導入処理の実行を足し、4-2-2 の環境変数を設定する。consumer の Dockerfile には、実行段に pytest 9.2.0 を足したテスト段を加える（`unit_test` が使う） | `RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
 | `DS-OP-ENV-EXAMPLE-ZSCALER-NF-EXISTING-ENV-MIGRATION` | Zscaler 環境対応 | `.env.example` に Zscaler 設定の 3 項目を説明付きで足す（`ZSCALER_ENABLED=true`、ほかは空）。README に、既存の社外の環境は `ZSCALER_ENABLED=false` を書き足すことを書く | `RQ-NF-EXISTING-ENV-MIGRATION` |
+| `DS-OP-GITLAB-URL-README` | GitLab の URL の移行 | README の環境変数の表の `GITLAB_API_URL` を「本番は社内の GitLab の URL を書く。テスト環境では `.env.test` のコンテナから見た URL が優先される」と説明する。更新の注意として、本番で `docker-compose.yml` の `GITLAB_API_URL` を手で直していた環境は手直しを戻し、`.env` の `GITLAB_API_URL` が社内の GitLab を指していることを確かめること、手元のテスト環境は `.env` を書き換えずに `./scripts/test_setup.sh` を実行し直すことを書く | `RQ-NF-UPDATE-WITHOUT-MIGRATION-WORK` |
 | `DS-OP-FRONTEND-SPA-DELIVERY-NF-SCREEN-TRANSITION-2S` | 管理画面の配信 | `node:20-alpine` でビルドし、nginx で配信する。画面の遷移はブラウザの中で行い、`/api/` だけを backend へ転送する。転送先の backend の名前は、compose のネットワークの名前解決（`127.0.0.11`）で要求のたびに引き直す（backend だけが作り直されて宛先が変わっても、古い宛先へつなぎ続けないため） | `RQ-NF-SCREEN-TRANSITION-2S` |
 | `DS-OP-GITIGNORE-ZSCALER-DT-ZSCALER-CERT-FILE` | Zscaler 環境対応 | `.gitignore` に `certs/`、`.zscaler/`、`zscaler-mock/.data/` を足す | `RQ-DT-ZSCALER-CERT-FILE` |
 | `DS-OP-HEALTH-MONITORING-OP-HEALTH-MONITORING` | 死活監視 | PostgreSQL の `pg_isready`、backend と producer の `/health`、全サービスの自動再起動 | `RQ-OP-HEALTH-MONITORING` |
@@ -1211,7 +1222,7 @@ docker compose --profile test run --rm unit_test
 | `DS-OP-NETWORK-EXPOSURE-NF-INTERNAL-NETWORK-ONLY` | 公開するポート | ホストへ公開するのは frontend の 80、backend の 8000、PostgreSQL の 5432、RabbitMQ の 5672・15672（テストでは GitLab の 8929、モック LLM の 4000、LiteLLM の 4001）。どれも HTTP（TLS なし）で、社内のネットワークの中だけで使う | `RQ-NF-INTERNAL-NETWORK-ONLY` |
 | `DS-OP-PUBLISH-IMAGES-FT-PUBLISH-COMPONENT-IMAGES` | イメージの公開 | `.github/workflows/build-and-push.yml`。main と `copilot/**` への push と手動の実行で、backend・frontend・producer・consumer・mock-llm のイメージを ghcr.io に `latest` とコミットのハッシュで push する | `RQ-FT-PUBLISH-COMPONENT-IMAGES` |
 | `DS-OP-README-OPERATIONS-NF-DIND-TRUSTED-USERS` | README | 起動、初期セットアップ、テスト環境、画面の一覧、E2E の実行、CLI コンテナが特権で動くため信頼できる利用者に限る旨 | `RQ-NF-DIND-TRUSTED-USERS`、`RQ-UI-SETUP-CMD`、`RQ-UI-TEST-SETUP-CMD` |
-| `DS-OP-TEST-ENVIRONMENT-FT-SETUP-TEST-ENVIRONMENT` | テスト環境 | `scripts/test_setup.py`（GitLab の bot・グループ・プロジェクト・ラベル・Group Webhook・テストユーザー、Virtual Key、管理画面のユーザーの準備と `.env.test` の書き出し）、`litellm/config.yml`・`config-real.yml`、compose の test・test-real のプロファイル、`e2e/` の Playwright の設定と前後処理（キューを空にする、開いた MR を閉じる） | `RQ-FT-SETUP-TEST-ENVIRONMENT`、`RQ-UI-TEST-SETUP-CMD` |
+| `DS-OP-TEST-ENVIRONMENT` | テスト環境 | `scripts/test_setup.py`（GitLab の bot・グループ・プロジェクト・ラベル・Group Webhook・テストユーザー、Virtual Key、管理画面のユーザーの準備と `.env.test` の書き出し）、`litellm/config.yml`・`config-real.yml`、compose の test・test-real のプロファイル、`e2e/` の Playwright の設定と前後処理（キューを空にする、開いた MR を閉じる）。GitLab の URL は次のとおり扱う。① `test_setup.sh` は、ホストから見たテスト用の GitLab の URL を `http://localhost:8929` に決め（`.env` の値は使わない）、`test_setup.py` に渡す。② `test_setup.py` は `.env.test` を丸ごと書き直し、`GITLAB_API_URL` にコンテナから見た URL（環境変数 `GITLAB_CONTAINER_URL`、既定 `http://gitlab:8929`）を書く。③ `test_setup.sh` は `.env.test` を読み込んだ直後に、ホストで使う `GITLAB_API_URL` をホストから見た URL に戻す。④ 手元の `.env` は、無いときだけ見本から作り、あるときは書き換えない。⑤ ステップ 7 の Playwright の E2E を始める直前の時刻（UTC）、LiteLLM Proxy のサービス名、構築の最初に取った `.env` のハッシュを、ステップ 8 のホストの E2E に環境変数で渡す。最初の起動では producer と consumer が前回の `.env.test` の値（初回は `.env` の値）で起動するが、ステップ 6（`--run-tests` ならテスト前の後片付け）で作り直してから使う | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE`、`RQ-UI-TEST-SETUP-CMD`、`RQ-FT-USE-GITLAB-URL-FROM-ENV` |
 | `DS-OP-MOCK-LITELLM-DROP-PARAMS-EX-USE-LOCAL-HTTP-MOCK` | テスト環境 | `litellm/config.yml`（モック LLM モード）の `litellm_settings` に `drop_params: true` を置き、モック LLM が応じない設定項目（opencode が上位のモデルに送る推論の強さなど）を捨ててから転送する。`litellm/config-real.yml` には置かない（本物の API はこれらを受け付けるため）。モックの正本は `mock-llm/` と `litellm/config.yml` で、`external/litellm/mock/` からシンボリックリンクで参照する。設定ファイルは 1 ファイルだけをコンテナに差し込んでいて、置き換えても動いているコンテナには反映されないため、テスト環境の構築（`scripts/test_setup.sh` のステップ 1）は、サービスの起動の後に、そのモードの LiteLLM Proxy（`litellm` か `litellm_real`）のコンテナを毎回作り直す | `RQ-EX-USE-LOCAL-HTTP-MOCK` |
 | `DS-OP-OPENCODE-CLAUDE-NO-MIGRATION-NF-OPENCODE-CLAUDE-NO-MIGRATION` | 移行 | opencode で Claude のモデルを使えるようにした変更の移行: 移すデータは無い。DB の CLI アダプタ設定は書き換えず、初期セットアップも再実行しない。consumer のイメージを作り直して `./scripts/compose.sh` で起動し直すだけで終わる。CLI コンテナのイメージは変わらない。確認は、opencode と `anthropic/` で始まるモデルを指定した MR 処理の完了で行う | `RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
 | `DS-OP-TRACEABILITY-HOOKS-FT-CHECK-TRACEABILITY` | 対応表チェックの仕組み | `scripts/isdd/pre-commit`（`.git/hooks/pre-commit` に組み込み。壊れた参照でコミットを止める）、`scripts/isdd/completeness.json`（実行形態 container・認証あり・外部連携あり）、`scripts/isdd/VERSION`、`.claude/settings.json` の応答終了時のフック、`AGENTS.md` と `CLAUDE.md` の規則 | `RQ-FT-CHECK-TRACEABILITY` |
@@ -1228,7 +1239,7 @@ docker compose --profile test run --rm unit_test
 | 名前 | 用途 | 既定値 | 必須 |
 |---|---|---|---|
 | `GITLAB_PAT` | bot の PAT | 空 | ○ |
-| `GITLAB_API_URL` | GitLab の URL（compose で producer と consumer は `http://gitlab:8929` に上書き） | `https://gitlab.com` | ○ |
+| `GITLAB_API_URL` | GitLab の URL。テスト環境では `.env.test` の値（コンテナから見た `http://gitlab:8929`）が優先される | `https://gitlab.com` | ○ |
 | `GITLAB_BOT_NAME` | bot のユーザー名 | 空 | ○ |
 | `GITLAB_BOT_LABEL`・`GITLAB_PROCESSING_LABEL`・`GITLAB_DONE_LABEL` | 特定ラベル・処理中ラベル・完了ラベル | `coding agent`・`coding agent processing`・`coding agent done` | — |
 | `GITLAB_WEBHOOK_SECRET` | Webhook のトークン | 空（空なら確かめない） | ○ |
@@ -1355,7 +1366,7 @@ Zscaler 環境対応の障害対応:
 | `DS-FN-INSTALL-CA-NSS-FT-APPLY-ZSCALER-SETTINGS-CLI-BROWSER` | `RQ-FT-APPLY-ZSCALER-SETTINGS-CLI-BROWSER` |
 | `DS-FN-INSTALL-CA-SYSTEM-FT-APPLY-ZSCALER-SETTINGS-BUILD` | `RQ-FT-APPLY-ZSCALER-SETTINGS-BUILD` |
 | `DS-FN-INSTALL-HOST-PYTHON-DEPS-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` | `RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` |
-| `DS-FN-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT` |
+| `DS-FN-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE` |
 | `DS-FN-LIST-TASKS-FT-LIST-TASK-HISTORY` | `RQ-FT-LIST-TASK-HISTORY` |
 | `DS-FN-LOAD-SETTINGS-UI-ENV-SETTINGS` | `RQ-UI-ENV-SETTINGS` |
 | `DS-FN-LOAD-ZSCALER-SETTINGS-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` | `RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` |
@@ -1474,10 +1485,10 @@ Zscaler 環境対応の障害対応:
 | `DS-MD-SCRIPTS-ISDD-CHECK-SH-FT-CHECK-TRACEABILITY` | `RQ-FT-CHECK-TRACEABILITY` |
 | `DS-MD-SCRIPTS-ISDD-COMPLETENESS-CHECKER-FT-CHECK-TRACEABILITY` | `RQ-FT-CHECK-TRACEABILITY` |
 | `DS-MD-SCRIPTS-ISDD-TRACE-MAP-CHECKER-FT-CHECK-TRACEABILITY` | `RQ-FT-CHECK-TRACEABILITY` |
-| `DS-MD-SCRIPTS-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT` |
+| `DS-MD-SCRIPTS-LEGACY-GITLAB-SETUP-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE` |
 | `DS-MD-SCRIPTS-SETUP-PY-FT-SETUP-INITIAL-DATA` | `RQ-FT-SETUP-INITIAL-DATA` |
 | `DS-MD-SCRIPTS-SETUP-SH-FT-SETUP-INITIAL-DATA` | `RQ-FT-SETUP-INITIAL-DATA`、`RQ-UI-SETUP-CMD`、`RQ-FT-REQUIRE-ZSCALER-SETTINGS` |
-| `DS-MD-SCRIPTS-TEST-SETUP-SH-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT`、`RQ-UI-TEST-SETUP-CMD`、`RQ-UI-TEST-SETUP-ZSCALER-MOCK-OPTION`、`RQ-FT-RUN-ZSCALER-MOCK-PROXY`、`RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` |
+| `DS-MD-SCRIPTS-TEST-SETUP-SH-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE`、`RQ-UI-TEST-SETUP-CMD`、`RQ-UI-TEST-SETUP-ZSCALER-MOCK-OPTION`、`RQ-FT-RUN-ZSCALER-MOCK-PROXY`、`RQ-FT-APPLY-ZSCALER-SETTINGS-HOST-SCRIPT` |
 | `DS-MD-SCRIPTS-VERIFY-DIND-WARMUP-FT-MEASURE-CLI-CONTAINER-STARTUP` | `RQ-FT-MEASURE-CLI-CONTAINER-STARTUP` |
 | `DS-MD-SHARED-CONFIG-PACKAGE-UI-ENV-SETTINGS` | `RQ-UI-ENV-SETTINGS` |
 | `DS-MD-SHARED-CONFIG-UI-ENV-SETTINGS` | `RQ-UI-ENV-SETTINGS` |
@@ -1512,7 +1523,7 @@ Zscaler 環境対応の障害対応:
 | `DS-OP-NETWORK-EXPOSURE-NF-INTERNAL-NETWORK-ONLY` | `RQ-NF-INTERNAL-NETWORK-ONLY` |
 | `DS-OP-PUBLISH-IMAGES-FT-PUBLISH-COMPONENT-IMAGES` | `RQ-FT-PUBLISH-COMPONENT-IMAGES` |
 | `DS-OP-README-OPERATIONS-NF-DIND-TRUSTED-USERS` | `RQ-NF-DIND-TRUSTED-USERS`、`RQ-UI-SETUP-CMD`、`RQ-UI-TEST-SETUP-CMD` |
-| `DS-OP-TEST-ENVIRONMENT-FT-SETUP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT`、`RQ-UI-TEST-SETUP-CMD` |
+| `DS-OP-TEST-ENVIRONMENT` | `RQ-FT-SETUP-TEST-ENVIRONMENT-REPEATABLE`、`RQ-UI-TEST-SETUP-CMD`、`RQ-FT-USE-GITLAB-URL-FROM-ENV` |
 | `DS-OP-TRACEABILITY-HOOKS-FT-CHECK-TRACEABILITY` | `RQ-FT-CHECK-TRACEABILITY` |
 | `DS-OP-ZSCALER-MOCK-COMPOSE-FT-RUN-ZSCALER-MOCK-PROXY` | `RQ-FT-RUN-ZSCALER-MOCK-PROXY` |
 | `DS-OP-ZSCALER-SETUP-README-OP-ZSCALER-SETUP-PROCEDURE` | `RQ-OP-ZSCALER-SETUP-PROCEDURE` |
@@ -1556,10 +1567,16 @@ Zscaler 環境対応の障害対応:
 | `DS-TS-ZSCALER-SCRIPT-TESTS-FT-REQUIRE-ZSCALER-SETTINGS` | `RQ-FT-REQUIRE-ZSCALER-SETTINGS`、`RQ-FT-RESOLVE-CERT-BUNDLE`、`RQ-FT-BUILD-NO-PROXY-LIST` |
 | `DS-TS-ZSCALER-UNIT-TESTS-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER` | `RQ-FT-PASS-ZSCALER-SETTINGS-CLI-CONTAINER`、`RQ-FT-INSTRUCT-CLI-ZSCALER` |
 | `DS-FN-DETERMINE-OPENCODE-PROVIDER-BY-NAME-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
-| `DS-FN-BUILD-OPENCODE-PROVIDER-SETTINGS-FT-CALL-CLAUDE-VIA-OPENCODE` | `RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` |
+| `DS-FN-BUILD-OPENCODE-CONFIG` | `RQ-FT-PASS-CLAUDE-CONNECTION-TO-OPENCODE`、`RQ-FT-USE-MAIN-MODEL-AS-OPENCODE-TITLE-MODEL`、`RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION`、`RQ-NF-UPDATE-WITHOUT-MIGRATION-WORK` |
 | `DS-OP-MOCK-LITELLM-DROP-PARAMS-EX-USE-LOCAL-HTTP-MOCK` | `RQ-EX-USE-LOCAL-HTTP-MOCK` |
 | `DS-OP-OPENCODE-CLAUDE-NO-MIGRATION-NF-OPENCODE-CLAUDE-NO-MIGRATION` | `RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
-| `DS-TS-OPENCODE-MODEL-NAME-UNIT-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-FT-CALL-CLAUDE-VIA-OPENCODE`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-TS-OPENCODE-RESOLVER-UNIT` | `RQ-FT-DETERMINE-OPENCODE-PROVIDER-BY-NAME`、`RQ-FT-PASS-CLAUDE-CONNECTION-TO-OPENCODE`、`RQ-FT-USE-MAIN-MODEL-AS-OPENCODE-TITLE-MODEL`、`RQ-NF-OPENCODE-CLAUDE-NO-MIGRATION` |
+| `DS-OP-COMPOSE-GITLAB-URL` | `RQ-FT-USE-GITLAB-URL-FROM-ENV` |
+| `DS-OP-GITLAB-URL-README` | `RQ-NF-UPDATE-WITHOUT-MIGRATION-WORK` |
+| `DS-TS-GITLAB-URL-FROM-ENV-E2E` | `RQ-TS-VERIFY-GITLAB-URL-FROM-ENV` |
+| `DS-TS-TEST-SETUP-REPEATABLE-E2E` | `RQ-TS-VERIFY-TEST-SETUP-REPEATABLE` |
+| `DS-TS-OPENCODE-NO-UNKNOWN-MODEL-CALL-E2E` | `RQ-TS-VERIFY-OPENCODE-NO-UNKNOWN-MODEL-CALL` |
+| `DS-TS-OPENCODE-CLAUDE-ISSUE-TO-MR-E2E` | `RQ-TS-VERIFY-OPENCODE-NO-UNKNOWN-MODEL-CALL` |
 | `DS-TS-OPENCODE-UNPREFIXED-CLAUDE-E2E-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL` | `RQ-TS-VERIFY-OPENCODE-UNPREFIXED-CLAUDE-MODEL`、`RQ-EX-USE-LOCAL-HTTP-MOCK` |
 
 ### 11-1. 除外要件
