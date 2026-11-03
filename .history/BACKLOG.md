@@ -11,7 +11,8 @@
 ## opencode で Claude のモデルを使えるようにする
 
 - [ ] isdd-change-req から変更要求として要件・設計を立て、実装する（追加 2026-11-02、重要 低）
-  - ブランチ `feature/opencode-claude-model`（`50e6848` まで）。モック・実 LLM（T-35）とも通過。逆引き整合も済み。PR #11 を作成済み。2026-11-03 にモデル名の判定を本番の名前（プロバイダ名なし）に合わせる変更を実装（`.history/20261103-opencode-model-name-rule/`、モック全件通過、未コミット）。残りはコミット・PR への反映・レビュー
+  - 「プロバイダ/モデル」の形で Claude を呼べる部分は PR #11 で main に取り込み済み（2026-11-03、`2b90edc`）
+  - 本番の名前（プロバイダ名なし）に合わせる変更（`.history/20261103-opencode-model-name-rule/`）は PR #12 で出している（ブランチ `feature/opencode-claude-model`、`963fb00`）。モック全件通過、実 LLM では未確認。残りはレビューと取り込み
 
 ## 既存の不具合
 
