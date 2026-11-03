@@ -14,3 +14,4 @@
 - **外へ出る通信は、必ず Zscaler の証明書を信頼したうえでプロキシを経由させる。証明書の検証を無効にしない。**
 - **起動は `./scripts/compose.sh`、テスト環境は `./scripts/test_setup.sh`（模擬プロキシは `--zscaler-mock`）を使う。`docker compose` を直接使わない。**
 - **Zscaler まわりを変えたら、模擬プロキシありと `ZSCALER_ENABLED=false` の両方の通し確認で確かめる。**
+- **`.env` の API キーやトークンの値を出力に出さない。値は名前と長さだけで確かめ、コミット・PR の前に値が混じっていないか照合する。**
